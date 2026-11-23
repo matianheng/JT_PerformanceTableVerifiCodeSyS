@@ -55,14 +55,14 @@
 <body>
 <div class="wrap">
   <h1>JTC100G6 性能表动态校验 + ST 代码生成</h1>
-  <div class="sub">上传性能表 Excel，页面就地解析、校验、生成 CoDeSys ST 代码。不再写死数据，Excel 改了，工具跟着改。默认已载入 2026-11-23 版内置数据，可直接用；上传新文件后自动替换。<span class="badge" id="dataBadge">内置数据</span></div>
+  <div class="sub">上传性能表 Excel，页面就地解析、校验、生成 CoDeSys ST 代码。打开时是空的，什么结果都没有，传了你的 Excel 才开始算；也可以点“使用内置数据”载入 2026-11-23 版（早上给的那份表）。<span class="badge" id="dataBadge">尚未上传</span></div>
 
   <h2 style="border-top:none;padding-top:0">1. 上传性能表 Excel</h2>
   <div class="drop" id="drop">把 .xlsx 文件拖到这里，或点击选择文件<input type="file" id="fileInput" accept=".xlsx,.xls"></div>
-  <div class="sec"><div class="info" id="fileInfo">当前数据：内置（JTC100G6-性能表20260125-完整版-力限填充.xlsx，2026-11-23）。上传后此处显示文件名与解析结果。</div><div class="rowbtns"><button id="resetData">↩ 恢复内置数据（清除上次上传）</button></div></div>
+  <div class="sec"><div class="info" id="fileInfo">尚未上传。请把性能表 .xlsx 拖到上面，或点“使用内置数据”载入 2026-11-23 版。上传后此处显示文件名与解析结果。</div><div class="rowbtns"><button id="useBuiltin">使用内置数据（2026-11-23 版）</button><button id="resetData">↩ 清除上次上传（回到空状态）</button></div></div>
 
   <h2>2. 校验结果</h2>
-  <div class="sec"><div class="info" id="validSummary">正在对内置数据做校验…</div><div id="validList"></div></div>
+  <div class="sec"><div class="info" id="validSummary">尚未上传 Excel，请先在第 1 节上传文件。</div><div id="validList"></div></div>
   <div class="sec"><div class="lab">错误圈图（当前选中的表：第 3 节选的 PRG 与组别）</div>
     <div class="sub">红圈=确认错误，黄圈=待确认，蓝点=在线改过的值。改完 Excel 重新上传，或直接在第 3 节的表里改，圈图跟着变。</div>
     <div class="sub" id="imgCount"></div>

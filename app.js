@@ -46,7 +46,7 @@ function expandCompact(parts) {
   });
   return data;
 }
-state.data = (typeof window !== 'undefined' && window.__DP) ? expandCompact(window.__DP) : null;
+state.data = null;  // 启动时不载入任何数据；上传 Excel、恢复上次上传或点“使用内置数据”后才有数据
 
 /* ---------------- 工具 ---------------- */
 const $ = id => document.getElementById(id);
@@ -483,6 +483,7 @@ function lookupValue(grpName, boom, rad) {
 /* ---------------- 渲染 ---------------- */
 function renderSheets() {
   const el = $('sheetBtns'); el.innerHTML = '';
+  if (!state.data) return;
   Object.keys(state.data.sheets).forEach(s => {
     const b = document.createElement('button');
     b.textContent = s; if (s === state.sheet) b.className = 'on';
@@ -492,6 +493,7 @@ function renderSheets() {
 }
 function renderPrgs() {
   const el = $('prgBtns'); el.innerHTML = '';
+  if (!state.data) return;
   const names = Object.keys(state.data.sheets[state.sheet] || {});
   const order = PRG_ORDER.filter(p => names.includes(p)).concat(names.filter(p => !PRG_ORDER.includes(p)));
   order.forEach(p => {
@@ -503,6 +505,7 @@ function renderPrgs() {
   });
 }
 function renderInfo() {
+  if (!state.data) { $('blockInfo').innerHTML = '尚未上传 Excel，请先在第 1 节上传文件。'; const w0 = $('blockWarn'); if (w0) w0.style.display = 'none'; return; }
   const b = block();
   $('blockInfo').innerHTML = '当前：<b>' + state.sheet + ' · ' + state.prg + '</b>（' + (PRG_LABEL[state.prg] || b.label) + '）｜数据源：<b>' + (state.src === 'orig' ? '原表' : '力限填充版') + '</b>｜Excel 标题行 R' + b.titleRow + '｜数据：' + esc(state.dataLabel);
   const w = $('blockWarn');
@@ -512,6 +515,7 @@ function renderInfo() {
 }
 function renderBooms() {
   const el = $('boomBtns'); el.innerHTML = '';
+  if (!state.data) return;
   boomList().forEach(b => {
     const btn = document.createElement('button');
     btn.textContent = fmtB(parseFloat(b)) + 'm（' + arrName() + '[' + boomIndex(b) + ']）';
@@ -522,6 +526,7 @@ function renderBooms() {
 }
 function renderOut() {
   const out = $('out'), tbl = $('checkTable'), w = $('warnOut');
+  if (!state.data) { out.textContent = '请先上传 Excel。'; tbl.innerHTML = ''; w.innerHTML = ''; return; }
   if (state.boom === null) { out.textContent = '请先选臂长。'; tbl.innerHTML = ''; w.innerHTML = ''; return; }
   out.textContent = stLinesFor(state.grp, state.boom);
   let html = '<tr><th>幅度(m)</th><th class="num">Excel 值（点格子可改）</th><th class="num">进程序</th><th>备注</th></tr>';
@@ -539,6 +544,7 @@ function renderOut() {
 /* 分段复制：当前 PRG 每个臂长一段，各自带复制按钮 */
 function renderSegments() {
   const el = $('segBtns'); if (!el) return;
+  if (!state.data) { el.innerHTML = ''; return; }
   const b = block();
   let html = '';
   [['Full', '全伸组'], ['Half', '快伸组'], ['Third', '第三组']].forEach(([g, label]) => {
@@ -567,6 +573,7 @@ function cellIssueLevel(grp, boom, rad) {
 }
 /* 扫一遍全部 36 个表×3 组，记下哪些表有圈（供跳转栏用；只在数据变化时算一次） */
 function computeCircleTables() {
+  if (!state.data) { state.circleTables = []; return; }
   const saved = { sheet: state.sheet, prg: state.prg, grp: state.grp };
   const out = [];
   Object.keys(state.data.sheets).forEach(sh => {
@@ -614,6 +621,7 @@ function stepErrorTable(dir) {
 }
 function renderCircleJump() {
   const el = $('circleJump'); if (!el) return;
+  if (!state.data) { el.innerHTML = ''; return; }
   const list = state.circleTables || [];
   if (!list.length) { el.innerHTML = '<span class="sub">全部 36 个表都没有错误格。</span>'; return; }
   const gName = g => g === 'Full' ? '全伸组' : g === 'Half' ? '快伸组' : '第三组';
@@ -623,6 +631,15 @@ function renderCircleJump() {
 function drawErrorImage() {
   const cv = $('errCanvas'); if (!cv) return;
   const ctx = cv.getContext && cv.getContext('2d'); if (!ctx) return;
+  if (!state.data) {
+    cv.width = 640; cv.height = 90;
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 640, 90);
+    ctx.fillStyle = '#888'; ctx.font = '14px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('尚未上传 Excel，圈图在这里出。', 12, 45);
+    const cap0 = $('imgCount'); if (cap0) cap0.textContent = '尚未上传 Excel。';
+    const nav0 = $('errNavLabel'); if (nav0) nav0.textContent = '';
+    return;
+  }
   const b = block();
   const g = b[state.src][state.grp];
   const booms = state.grp === 'Half' ? ['13'].concat(g.booms.map(String)) : g.booms.map(String);
@@ -677,6 +694,7 @@ function drawErrorImage() {
   }
 }
 function renderValidation() {
+  if (!state.data) { $('validSummary').innerHTML = '尚未上传 Excel，请先在第 1 节上传文件。'; $('validList').innerHTML = ''; return; }
   const errs = issues.filter(i => i.level === 'err').length;
   const warns = issues.filter(i => i.level === 'warn').length;
   const infos = issues.filter(i => i.level === 'info').length;
@@ -756,9 +774,10 @@ function copyText(txt, btn) {
   else fallback();
   function fallback() { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) { } document.body.removeChild(ta); }
 }
-$('copyOne').onclick = e => { if (state.boom === null) { alert('请先选一个臂长'); return; } copyText($('out').textContent, e.target); };
-$('copyAll').onclick = e => { copyText(fullPRGText(), e.target); };
+$('copyOne').onclick = e => { if (!state.data) { alert('请先上传 Excel'); return; } if (state.boom === null) { alert('请先选一个臂长'); return; } copyText($('out').textContent, e.target); };
+$('copyAll').onclick = e => { if (!state.data) { alert('请先上传 Excel'); return; } copyText(fullPRGText(), e.target); };
 $('lkGo').onclick = () => {
+  if (!state.data) { $('lkOut').innerHTML = '<div class="err">请先上传 Excel。</div>'; return; }
   const grp = $('lkGrp').value;
   const boom = parseFloat($('lkBoom').value), rad = parseFloat($('lkRad').value);
   const load = parseFloat($('lkLoad').value);
@@ -828,7 +847,24 @@ $('fileInput').addEventListener('change', e => { if (e.target.files[0]) handleFi
 ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
 
-/* ---------------- 启动：先恢复上次上传的 Excel；没有则用内置数据 ---------------- */
+/* 点“使用内置数据”才载入 2026-11-23 版内置数据（就是早上给的那份 Excel 的原表+填充版） */
+function loadBuiltin() {
+  if (typeof window === 'undefined' || !window.__DP) { $('fileInfo').innerHTML = '<b>内置数据未加载。</b>'; return; }
+  state.data = expandCompact(window.__DP);
+  dataOrig = JSON.parse(JSON.stringify(state.data));
+  state.edits = {};
+  state.fileMeta = null;
+  state.dataLabel = '内置数据（2026-11-23）';
+  $('dataBadge').textContent = '内置数据';
+  issues = (typeof BUILTIN_ISSUES !== 'undefined' ? BUILTIN_ISSUES : []);
+  issuesOrig = JSON.parse(JSON.stringify(issues));
+  $('fileInfo').innerHTML = '已载入 <b>内置数据（2026-11-23 版）</b>：就是早上给的那份 JTC100G6 性能表，原表+填充版。想用自己改过的表，请上传 Excel（上传后会自动记住）。';
+  computeCircleTables(); renderCircleJump();
+  jumpToFirstErrorTable();
+  renderValidation(); renderAll();
+}
+$('useBuiltin').onclick = loadBuiltin;
+/* ---------------- 启动：先恢复上次上传的 Excel；没有则等用户上传或点内置数据 ---------------- */
 (function init() {
   try {
     const saved = typeof localStorage !== 'undefined' && localStorage.getItem(LS_KEY);
@@ -850,11 +886,10 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) h
       }
     }
   } catch (e) { /* 恢复失败则用内置数据 */ }
-  if (!state.data) { $('validSummary').textContent = '内置数据未加载。'; return; }
-  issues = (typeof BUILTIN_ISSUES !== 'undefined' ? BUILTIN_ISSUES : []);
-  issuesOrig = JSON.parse(JSON.stringify(issues));
-  dataOrig = JSON.parse(JSON.stringify(state.data));
-  computeCircleTables(); renderCircleJump();
-  jumpToFirstErrorTable();
+  // 没恢复到上传，也没点内置数据：空状态，不显示任何校验结果
+  issues = [];
+  issuesOrig = [];
+  dataOrig = null;
+  state.circleTables = [];
   renderValidation(); renderAll();
 })();
