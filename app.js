@@ -6,8 +6,11 @@ const SCOPE = [3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 9.0, 10.0,
 const PRG_ORDER = ['FC38HY', 'FC38', 'HC38HY', 'HC38', 'FC27HY', 'FC27', 'HC27HY', 'HC27', 'FC21HY', 'FC21', 'HC21HY', 'HC21', 'FC14HY', 'FC14', 'HC14HY', 'HC14', 'FC00', 'HC00'];
 const PRG_LABEL = { 'FC38HY': '全伸 38t 后移800', 'FC38': '全伸 38t 后移0', 'HC38HY': '半伸 38t 后移800', 'HC38': '半伸 38t 后移0', 'FC27HY': '全伸 27t 后移800', 'FC27': '全伸 27t 后移0', 'HC27HY': '半伸 27t 后移800', 'HC27': '半伸 27t 后移0', 'FC21HY': '全伸 20.5t 后移800', 'FC21': '全伸 20.5t 后移0', 'HC21HY': '半伸 20.5t 后移800', 'HC21': '半伸 20.5t 后移0', 'FC14HY': '全伸 14t 后移800', 'FC14': '全伸 14t 后移0', 'HC14HY': '半伸 14t 后移800', 'HC14': '半伸 14t 后移0', 'FC00': '全伸 0t', 'HC00': '半伸 0t' };
 
-let state = { data: null, dataLabel: '内置数据', sheet: '六臂模式', prg: 'FC14', src: 'orig', grp: 'Full', boom: null };
+let state = { data: null, dataLabel: '内置数据', sheet: '六臂模式', prg: 'FC14', src: 'orig', grp: 'Full', boom: null, fileMeta: null, edits: {} };
 let issues = [];   // {level:'err'|'warn'|'info', sheet, prg, cell, text}
+let issuesOrig = null;  // 载入/上传时的原始校验结果（撤销在线修改时恢复）
+let dataOrig = null;    // 载入/上传时的数据深拷贝（撤销在线修改时恢复）
+const LS_KEY = 'jt_perf_upload_v1';  // localStorage：上次上传的 Excel 解析结果
 
 /* 内置数据以紧凑数组形式分块存放在 data/data_*.js（window.__DP），此处展开为 app 用的键值模型 */
 function expandCompact(parts) {
@@ -303,6 +306,95 @@ function prgScope() {
   const base = state.sheet === '五臂模式' ? SCOPE.slice(0, 31) : SCOPE.slice();
   return state.prg === 'FC38HY' ? [2.5].concat(base) : base;
 }
+function setCell(grp, boom, rad, v) {
+  const g = block()[state.src][grp];
+  if (rad === 2.5) {
+    if (grp === 'Half' && String(boom) === '13') {
+      const exF = block()[state.src]['Full'].extra || (block()[state.src]['Full'].extra = {});
+      (exF['2.5'] || (exF['2.5'] = {}))['13'] = v;
+    } else {
+      const ex = g.extra || (g.extra = {});
+      (ex['2.5'] || (ex['2.5'] = {}))[String(boom)] = v;
+    }
+    return;
+  }
+  const row = (grp === 'Half' && String(boom) === '13') ? block()[state.src]['Full']['rows']['13'] : g.rows[String(boom)];
+  if (row) row[rk(rad)] = v;
+}
+function excelCellFor(grp, boom, rad) {
+  const b = block();
+  const bl = b[state.src][grp].booms.map(String);
+  let ci = bl.indexOf(String(boom));
+  if (grp === 'Half') ci = String(boom) === '13' ? 0 : 9 + ci;
+  if (grp === 'Third') ci = 15 + ci;
+  const ampCol0 = state.sheet === '五臂模式' ? 0 : 1;
+  const col = colLetter(ampCol0 + 1 + ci);
+  const has25 = !!(b[state.src]['Full'].extra && b[state.src]['Full'].extra['2.5']);
+  const rowIdx = rad === 2.5 ? 0 : SCOPE.indexOf(rad) + (has25 ? 1 : 0);
+  return col + (b.titleRow + 3 + rowIdx);
+}
+/* 重算某一臂长列的校验问题（与 validate() 同一套文本格式；只对原表重算） */
+function columnIssues(grp, boom) {
+  const out = [];
+  const tag = state.sheet + ' · ' + state.prg + '（R' + block().titleRow + '）';
+  const bm = cleanBoom(parseFloat(boom));
+  const radii = prgScope();
+  const colVals = radii.map(r => ({ rad: r, v: cellVal(grp, boom, r) }));
+  const present = colVals.filter(x => typeof x.v === 'number' && x.v !== 0);
+  const minI = present.length ? colVals.indexOf(present[0]) : -1;
+  const maxI = present.length ? colVals.indexOf(present[present.length - 1]) : -1;
+  let prev = null, prevR = null;
+  colVals.forEach((x, i) => {
+    const cell = excelCellFor(grp, boom, x.rad);
+    if (typeof x.v === 'string') {
+      out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + x.rad + 'm 一格内有文本 ' + JSON.stringify(x.v) + '，不是数字，请核对纸质表' });
+      return;
+    }
+    if ((x.v === 0 || x.v === null || x.v === undefined) && minI >= 0 && i > minI && i < maxI) {
+      out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + x.rad + 'm 空白空洞' });
+      return;
+    }
+    if (typeof x.v !== 'number') return;
+    if (x.v % 100 !== 0) out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + x.rad + 'm = ' + x.v + '，不是 100 的倍数（请核对纸质表）' });
+    if (prev !== null && x.v > prev) out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律' });
+    prev = x.v; prevR = x.rad;
+  });
+  return out;
+}
+function applyEdit(grp, boom, rad, newVal) {
+  const oldVal = cellVal(grp, boom, rad);
+  if (oldVal === newVal) return;
+  setCell(grp, boom, rad, newVal);
+  const key = [state.sheet, state.prg, state.src, grp, String(boom), String(rad)].join('|');
+  state.edits[key] = { grp, boom: String(boom), rad, old: oldVal, new: newVal };
+  if (state.src === 'orig') {
+    const needle = '臂长 ' + cleanBoom(parseFloat(boom)) + 'm、幅度 ';
+    issues = issues.filter(i => !(i.sheet === state.sheet && i.prg === state.prg && i.text.indexOf(needle) >= 0));
+    ['Full', 'Half', 'Third'].forEach(g => {
+      const bl = block()[state.src][g].booms.map(String);
+      if (bl.includes(String(boom)) || (g === 'Half' && String(boom) === '13')) issues = issues.concat(columnIssues(g, boom));
+    });
+  }
+  renderValidation(); renderOut(); renderEdits(); drawErrorImage();
+}
+function undoEdits() {
+  if (!dataOrig) return;
+  state.data = JSON.parse(JSON.stringify(dataOrig));
+  state.edits = {};
+  issues = issuesOrig ? JSON.parse(JSON.stringify(issuesOrig)) : [];
+  renderValidation(); renderAll(); renderEdits(); drawErrorImage();
+}
+function renderEdits() {
+  const el = $('editPanel'); if (!el) return;
+  const keys = Object.keys(state.edits);
+  if (!keys.length) { el.innerHTML = ''; return; }
+  let html = '<div class="info">✏️ 在线修改 ' + keys.length + ' 格（已记入当前数据，ST 代码与圈图已同步更新；重新上传 Excel 会清空这些修改）：<br>';
+  keys.forEach(k => { const e = state.edits[k]; html += '· ' + e.grp + ' ' + fmtB(parseFloat(e.boom)) + 'm / ' + e.rad + 'm：' + JSON.stringify(e.old) + ' → <b>' + e.new + '</b><br>'; });
+  if (state.src !== 'orig') html += '（当前是填充版：校验结果按原表算，改填充版不触发重算，请切回原表核对）';
+  html += '</div><div class="rowbtns"><button id="undoEdits">↩ 撤销全部在线修改</button></div>';
+  el.innerHTML = html;
+  $('undoEdits').onclick = undoEdits;
+}
 function cellVal(grp, boom, rad) {
   const g = block()[state.src][grp];
   if (rad === 2.5) {
@@ -430,16 +522,89 @@ function renderOut() {
   const out = $('out'), tbl = $('checkTable'), w = $('warnOut');
   if (state.boom === null) { out.textContent = '请先选臂长。'; tbl.innerHTML = ''; w.innerHTML = ''; return; }
   out.textContent = stLinesFor(state.grp, state.boom);
-  const row = boomRow(state.boom);
-  let html = '<tr><th>幅度(m)</th><th class="num">Excel 值</th><th class="num">进程序</th><th>备注</th></tr>';
-  SCOPE.forEach(rad => {
-    const v = row[rk(rad)];
+  let html = '<tr><th>幅度(m)</th><th class="num">Excel 值（点格子可改）</th><th class="num">进程序</th><th>备注</th></tr>';
+  prgScope().forEach(rad => {
+    const v = cellVal(state.grp, state.boom, rad);
     const iss = issues.find(i => i.sheet === state.sheet && i.prg === state.prg && i.text.indexOf('臂长 ' + cleanBoom(parseFloat(state.boom)) + 'm、幅度 ' + rad + 'm') >= 0);
+    const ek = [state.sheet, state.prg, state.src, state.grp, String(state.boom), String(rad)].join('|');
+    const ed = state.edits[ek];
     const cls = typeof v === 'string' ? 'bad' : iss ? (iss.level === 'err' ? 'bad' : 'warncell') : (v === 0 ? 'zero' : '');
-    html += '<tr><td>' + rad + '</td><td class="num ' + cls + '">' + esc(typeof v === 'string' ? v : v) + '</td><td class="num">' + (typeof v === 'string' ? 0 : v) + '</td><td>' + (iss ? esc(iss.text.split('】').pop() || iss.text) : '') + '</td></tr>';
+    html += '<tr><td>' + rad + '</td><td class="num ' + cls + (ed ? ' edited' : '') + '"><input class="celledit" type="text" inputmode="decimal" value="' + esc(typeof v === 'string' ? v : v) + '" data-grp="' + state.grp + '" data-boom="' + esc(String(state.boom)) + '" data-rad="' + rad + '"></td><td class="num">' + (typeof v === 'string' ? 0 : v) + '</td><td>' + (iss ? esc(iss.text.split('】').pop() || iss.text) : '') + (ed ? ' ✏️已改' : '') + '</td></tr>';
   });
   tbl.innerHTML = html;
   w.innerHTML = '';
+}
+/* 分段复制：当前 PRG 每个臂长一段，各自带复制按钮 */
+function renderSegments() {
+  const el = $('segBtns'); if (!el) return;
+  const b = block();
+  let html = '';
+  [['Full', '全伸组'], ['Half', '快伸组'], ['Third', '第三组']].forEach(([g, label]) => {
+    const booms = g === 'Half' ? ['13'].concat(b[state.src][g].booms.map(String)) : b[state.src][g].booms.map(String);
+    booms.forEach(bm => { html += '<button data-grp="' + g + '" data-boom="' + bm + '">' + label + ' ' + fmtB(parseFloat(bm)) + 'm 📋</button>'; });
+  });
+  el.innerHTML = html;
+}
+/* 圈图：当前选中表（PRG + 组别）画成表格图，错误红圈、待确认黄圈、改过的蓝点 */
+function cellIssueLevel(grp, boom, rad) {
+  const v = cellVal(grp, boom, rad);
+  if (typeof v === 'string') return 'err';
+  const vals = prgScope().map(r => cellVal(grp, boom, r));
+  const idx = prgScope().indexOf(rad);
+  let prev = null;
+  for (let i = 0; i < idx; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) prev = vals[i]; }
+  if (typeof v === 'number' && v !== 0 && prev !== null && v > prev) return 'err';
+  if (typeof v === 'number' && v !== 0 && v % 100 !== 0) return 'warn';
+  if (v === 0) {
+    let hasBefore = false, hasAfter = false;
+    for (let i = 0; i < idx; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) hasBefore = true; }
+    for (let i = idx + 1; i < vals.length; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) hasAfter = true; }
+    if (hasBefore && hasAfter) return 'err';
+  }
+  return null;
+}
+function drawErrorImage() {
+  const cv = $('errCanvas'); if (!cv) return;
+  const ctx = cv.getContext && cv.getContext('2d'); if (!ctx) return;
+  const b = block();
+  const g = b[state.src][state.grp];
+  const booms = state.grp === 'Half' ? ['13'].concat(g.booms.map(String)) : g.booms.map(String);
+  const radii = prgScope();
+  const radW = 62, colW = 96, rowH = 26, headH = 30, titleH = 48, legH = 32;
+  const W = radW + booms.length * colW, H = titleH + headH + radii.length * rowH + legH;
+  cv.width = W; cv.height = H;
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#111'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(state.sheet + ' · ' + state.prg + '（' + (PRG_LABEL[state.prg] || b.label) + '）· ' + (state.grp === 'Full' ? '全伸组' : state.grp === 'Half' ? '快伸组' : '第三组') + ' · ' + (state.src === 'orig' ? '原表' : '填充版'), 10, 18);
+  ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+  ctx.fillText('数据：' + state.dataLabel + '　' + new Date().toLocaleDateString(), 10, 38);
+  ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#f5f5f5'; ctx.fillRect(0, titleH, W, headH);
+  ctx.fillStyle = '#333'; ctx.fillText('幅度(m)', radW / 2, titleH + headH / 2);
+  booms.forEach((bm, i) => { ctx.fillText(fmtB(parseFloat(bm)) + 'm', radW + i * colW + colW / 2, titleH + headH / 2); });
+  radii.forEach((rad, j) => {
+    const y = titleH + headH + j * rowH;
+    if (j % 2 === 0) { ctx.fillStyle = '#fafafa'; ctx.fillRect(0, y, W, rowH); }
+    ctx.fillStyle = '#333'; ctx.fillText(String(rad), radW / 2, y + rowH / 2);
+    booms.forEach((bm, i) => {
+      const v = cellVal(state.grp, bm, rad);
+      const cx = radW + i * colW + colW / 2, cy = y + rowH / 2;
+      const lvl = cellIssueLevel(state.grp, bm, rad);
+      const ek = [state.sheet, state.prg, state.src, state.grp, String(bm), String(rad)].join('|');
+      ctx.fillStyle = typeof v === 'string' ? '#c00' : v === 0 ? '#bbb' : '#222';
+      ctx.fillText(typeof v === 'string' ? v : v, cx, cy);
+      if (lvl === 'err') { ctx.strokeStyle = '#d00'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.ellipse(cx, cy, 36, 11, 0, 0, Math.PI * 2); ctx.stroke(); }
+      else if (lvl === 'warn') { ctx.strokeStyle = '#d9a400'; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(cx, cy, 36, 11, 0, 0, Math.PI * 2); ctx.stroke(); }
+      if (state.edits[ek]) { ctx.fillStyle = '#1677ff'; ctx.beginPath(); ctx.arc(cx + 38, cy - 9, 4, 0, Math.PI * 2); ctx.fill(); }
+    });
+  });
+  ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1;
+  for (let j = 0; j <= radii.length; j++) { const y = titleH + headH + j * rowH; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  for (let i = 0; i <= booms.length; i++) { const x = radW + i * colW; ctx.beginPath(); ctx.moveTo(x, titleH); ctx.lineTo(x, titleH + headH + radii.length * rowH); ctx.stroke(); }
+  ctx.beginPath(); ctx.moveTo(radW, titleH); ctx.lineTo(radW, titleH + headH + radii.length * rowH); ctx.stroke();
+  const ly = H - legH / 2;
+  ctx.textAlign = 'left'; ctx.font = '12px sans-serif'; ctx.fillStyle = '#333';
+  ctx.fillText('🔴 红圈=确认错误　🟡 黄圈=待确认　🔵 蓝点=在线改过的值', 10, ly);
 }
 function renderValidation() {
   const errs = issues.filter(i => i.level === 'err').length;
@@ -453,19 +618,37 @@ function renderValidation() {
   });
   $('validList').innerHTML = html + '</table>';
 }
-function renderAll() { renderSheets(); renderPrgs(); renderInfo(); renderBooms(); renderOut(); }
+function renderAll() { renderSheets(); renderPrgs(); renderInfo(); renderBooms(); renderOut(); renderSegments(); renderEdits(); drawErrorImage(); }
 
 /* ---------------- 上传 ---------------- */
-function useUploaded(wb, fileName) {
+function saveUpload(fileName) {
   try {
+    localStorage.setItem(LS_KEY, JSON.stringify({ name: fileName, time: Date.now(), data: state.data, issues }));
+  } catch (e) { /* 存不下（如浏览器禁了本地存储）不影响使用，只是下次打开恢复不了 */ }
+}
+function useUploaded(wb, fileName, fileSize) {
+  try {
+    const prevKey = i => [i.sheet, i.prg, i.cell, i.text].join('|');
+    const prevIssues = issues.slice();
     const { data, found } = parseWorkbook(wb);
     const nPrg = Object.values(data.sheets).reduce((s, sh) => s + Object.keys(sh).length, 0);
     if (!nPrg) { $('fileInfo').innerHTML = '<b>解析失败：</b>在 ' + esc(fileName) + ' 里没找到含“幅度(m)”的性能表。请确认文件是 JTC100G6 性能表原文件。'; return; }
     state.data = data;
+    dataOrig = JSON.parse(JSON.stringify(data));
+    state.edits = {};
+    state.fileMeta = { name: fileName, time: Date.now(), size: fileSize || 0 };
     state.dataLabel = '已上传：' + fileName;
     $('dataBadge').textContent = '已上传文件';
-    $('fileInfo').innerHTML = '已载入 <b>' + esc(fileName) + '</b>：解析出 ' + Object.keys(data.sheets).length + ' 张表、' + nPrg + ' 个工况块。PRG 与块的对应按标题自动识别（跨距 8.4m=全伸、5.5m=半伸）。';
     issues = validate(found);
+    issuesOrig = JSON.parse(JSON.stringify(issues));
+    const errs = issues.filter(i => i.level === 'err').length;
+    const prevErrs = prevIssues.filter(i => i.level === 'err').length;
+    const prevSet = new Set(prevIssues.map(prevKey));
+    const fixed = prevIssues.filter(i => !issues.some(j => prevKey(j) === prevKey(i))).length;
+    let delta = '';
+    if (prevIssues.length && (state.fileMeta || prevIssues.length)) delta = '<br>与上次比：确认错误 ' + prevErrs + ' → ' + errs + ' 处' + (fixed ? '，已修复 ' + fixed + ' 处' : '') + '。';
+    $('fileInfo').innerHTML = '已载入 <b>' + esc(fileName) + '</b>（' + new Date().toLocaleString() + (fileSize ? '，' + Math.round(fileSize / 1024) + ' KB' : '') + '）：解析出 ' + Object.keys(data.sheets).length + ' 张表、' + nPrg + ' 个工况块。PRG 与块的对应按标题自动识别（跨距 8.4m=全伸、5.5m=半伸）。已记下这次上传，下次打开页面自动恢复，不用重新传。' + delta;
+    saveUpload(fileName);
     if (!data.sheets[state.sheet]) state.sheet = Object.keys(data.sheets)[0];
     if (!data.sheets[state.sheet][state.prg]) state.prg = Object.keys(data.sheets[state.sheet])[0];
     state.boom = null;
@@ -477,7 +660,7 @@ function useUploaded(wb, fileName) {
 function handleFile(file) {
   if (typeof XLSX === 'undefined') { $('fileInfo').innerHTML = '<b>解析库未加载：</b>当前离线或 CDN 不可达，无法解析上传的 Excel。内置数据仍可用；联网后刷新页面再上传。'; return; }
   const rd = new FileReader();
-  rd.onload = e => { try { useUploaded(XLSX.read(e.target.result, { type: 'array' }), file.name); } catch (err) { $('fileInfo').innerHTML = '<b>读取失败：</b>' + esc(err.message); } };
+  rd.onload = e => { try { useUploaded(XLSX.read(e.target.result, { type: 'array' }), file.name, file.size); } catch (err) { $('fileInfo').innerHTML = '<b>读取失败：</b>' + esc(err.message); } };
   rd.readAsArrayBuffer(file);
 }
 
@@ -486,13 +669,13 @@ $('srcBtns').addEventListener('click', e => {
   const s = e.target.dataset.src; if (!s) return;
   state.src = s; state.boom = null;
   document.querySelectorAll('#srcBtns button').forEach(b => b.classList.toggle('on', b.dataset.src === s));
-  renderBooms(); renderOut(); renderInfo();
+  renderAll();
 });
 $('grpBtns').addEventListener('click', e => {
   const g = e.target.dataset.grp; if (!g) return;
   state.grp = g; state.boom = null;
   document.querySelectorAll('#grpBtns button').forEach(b => b.classList.toggle('on', b.dataset.grp === g));
-  renderBooms(); renderOut();
+  renderAll();
 });
 function copyText(txt, btn) {
   const label = btn.textContent;
@@ -524,6 +707,35 @@ $('lkGo').onclick = () => {
   } else if (!isNaN(load)) html += '<br>额定载荷为 0（超出作业范围），不能起吊。';
   $('lkOut').innerHTML = html + '</div>';
 };
+$('checkTable').addEventListener('change', e => {
+  const inp = e.target;
+  if (!inp.classList || !inp.classList.contains('celledit')) return;
+  const raw = inp.value.trim();
+  const num = Number(raw);
+  const newVal = (raw !== '' && !isNaN(num)) ? num : raw;
+  applyEdit(inp.dataset.grp, inp.dataset.boom, parseFloat(inp.dataset.rad), newVal);
+});
+$('segBtns').addEventListener('click', e => {
+  const btn = e.target.closest ? e.target.closest('button') : e.target;
+  if (!btn || !btn.dataset.boom) return;
+  copyText(stLinesFor(btn.dataset.grp, btn.dataset.boom), btn);
+});
+$('dlImg').onclick = () => {
+  const cv = $('errCanvas');
+  if (!cv || !cv.toBlob) { alert('当前浏览器不支持导出图片'); return; }
+  cv.toBlob(bl => {
+    if (!bl) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(bl);
+    a.download = state.sheet + '_' + state.prg + '_' + state.grp + '_圈图.png';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+};
+$('resetData').onclick = () => {
+  try { localStorage.removeItem(LS_KEY); } catch (e) {}
+  location.reload();
+};
 const drop = $('drop');
 drop.addEventListener('click', () => $('fileInput').click());
 $('fileInput').addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
@@ -531,9 +743,29 @@ $('fileInput').addEventListener('change', e => { if (e.target.files[0]) handleFi
 ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
 
-/* ---------------- 启动：内置数据用预置校验结果，上传新文件后改为实时校验 ---------------- */
+/* ---------------- 启动：先恢复上次上传的 Excel；没有则用内置数据 ---------------- */
 (function init() {
+  try {
+    const saved = typeof localStorage !== 'undefined' && localStorage.getItem(LS_KEY);
+    if (saved) {
+      const obj = JSON.parse(saved);
+      if (obj && obj.data && obj.data.sheets) {
+        state.data = obj.data;
+        dataOrig = JSON.parse(JSON.stringify(obj.data));
+        state.fileMeta = { name: obj.name, time: obj.time };
+        state.dataLabel = '已上传：' + obj.name + '（已恢复）';
+        $('dataBadge').textContent = '已恢复上传';
+        issues = obj.issues || [];
+        issuesOrig = JSON.parse(JSON.stringify(issues));
+        $('fileInfo').innerHTML = '已恢复上次上传的 <b>' + esc(obj.name) + '</b>（' + new Date(obj.time).toLocaleString() + '）。改完 Excel 重新上传即可替换；点“恢复内置数据”可切回 2026-11-23 内置数据。';
+        renderValidation(); renderAll();
+        return;
+      }
+    }
+  } catch (e) { /* 恢复失败则用内置数据 */ }
   if (!state.data) { $('validSummary').textContent = '内置数据未加载。'; return; }
   issues = (typeof BUILTIN_ISSUES !== 'undefined' ? BUILTIN_ISSUES : []);
+  issuesOrig = JSON.parse(JSON.stringify(issues));
+  dataOrig = JSON.parse(JSON.stringify(state.data));
   renderValidation(); renderAll();
 })();

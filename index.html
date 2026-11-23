@@ -45,6 +45,11 @@
   .foot { color: #888; font-size: 12px; line-height: 1.7; margin-top: 18px; border-top: 1px solid #eee; padding-top: 10px; }
   .tabs button.on { background: #222; border-color: #222; }
   .badge { display: inline-block; background: #e6f7ff; border: 1px solid #91d5ff; color: #0958d9; border-radius: 4px; padding: 1px 8px; font-size: 12px; margin-left: 6px; }
+  .celledit { width: 96px; font-family: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid #ccc; border-radius: 4px; text-align: right; background: #fff; }
+  .celledit:focus { border-color: #1677ff; outline: none; }
+  td.edited { background: #e6f7ff; }
+  canvas#errCanvas { max-width: 100%; border: 1px solid #ddd; border-radius: 6px; margin-top: 8px; }
+  .segbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -54,10 +59,15 @@
 
   <h2 style="border-top:none;padding-top:0">1. 上传性能表 Excel</h2>
   <div class="drop" id="drop">把 .xlsx 文件拖到这里，或点击选择文件<input type="file" id="fileInput" accept=".xlsx,.xls"></div>
-  <div class="sec"><div class="info" id="fileInfo">当前数据：内置（JTC100G6-性能表20260125-完整版-力限填充.xlsx，2026-11-23）。上传后此处显示文件名与解析结果。</div></div>
+  <div class="sec"><div class="info" id="fileInfo">当前数据：内置（JTC100G6-性能表20260125-完整版-力限填充.xlsx，2026-11-23）。上传后此处显示文件名与解析结果。</div><div class="rowbtns"><button id="resetData">↩ 恢复内置数据（清除上次上传）</button></div></div>
 
   <h2>2. 校验结果</h2>
   <div class="sec"><div class="info" id="validSummary">正在对内置数据做校验…</div><div id="validList"></div></div>
+  <div class="sec"><div class="lab">错误圈图（当前选中的表：第 3 节选的 PRG 与组别）</div>
+    <div class="sub">红圈=确认错误，黄圈=待确认，蓝点=在线改过的值。改完 Excel 重新上传，或直接在第 3 节的表里改，圈图跟着变。</div>
+    <canvas id="errCanvas"></canvas>
+    <div class="rowbtns"><button id="dlImg">⬇ 下载圈图 (PNG)</button></div>
+  </div>
 
   <h2>3. 生成 ST 代码</h2>
   <div class="sec"><div class="lab">臂数</div>
@@ -91,6 +101,9 @@
     <pre id="out">请先选臂长。</pre>
     <div id="warnOut"></div>
     <table id="checkTable"></table>
+    <div id="editPanel" style="margin-top:10px"></div>
+    <div class="lab" style="margin-top:14px">分段复制：点哪个臂长，就复制哪一段代码（含 (*13.0m*) 这种标题行）</div>
+    <div class="segbtns" id="segBtns"></div>
   </div>
 
   <h2>4. 动态查表（插值算额定载荷）</h2>
@@ -109,7 +122,7 @@
   </div>
 
   <div class="foot">
-    约定：① 幅度点固定用程序示例的 35 个 Scope 点（3.0～52.0），Excel 里没有的幅度填 0。② Full_Weight 行号 = 全伸组内序号（0~8，第 9 行全 0）；Half_Weight 第 0 行是 13.0m（与全伸组同值），第 1~6 行是快伸组臂长，其余行全 0。③ 第三组在示例代码里没有对应数组，暂用 Third_Weight 占位。④ PRG 与 Excel 块的对应按标题自动识别：跨距 8.4m=全伸（F）、5.5m=半伸（H）；配重取右表（14t/20.5t→21）；后移 800mm=HY。标题里“全伸/半伸”文字不可靠（六臂半伸表全写错），以跨距为准。⑤ 校验规则：同臂长随幅度增大不得上升；数值应为 100 的倍数；幅度不得重复/缺失；标题配重分量和应等于吨数；右表有值格须与原表一致；填充版系数按 1.33 核对。
+    约定：① 幅度点按程序实际值：五臂 3.0～44.0（31 点）、六臂 3.0～52.0（35 点），FC38HY 首块多一个 2.5m 点；Excel 里没有的幅度填 0。② Full_Weight 行号 = 全伸组内序号（0~8，第 9 行全 0）；Half_Weight 第 0 行是 13.0m（与全伸组同值），第 1~6 行是快伸组臂长，其余行全 0。③ 第三组在示例代码里没有对应数组，暂用 Third_Weight 占位。④ PRG 与 Excel 块的对应按标题自动识别：跨距 8.4m=全伸（F）、5.5m=半伸（H）；配重取右表（14t/20.5t→21）；后移 800mm=HY。标题里“全伸/半伸”文字不可靠（六臂半伸表全写错），以跨距为准。⑤ 校验规则：同臂长随幅度增大不得上升；数值应为 100 的倍数；幅度不得重复/缺失；标题配重分量和应等于吨数；右表有值格须与原表一致；填充版系数按 1.33 核对。⑥ 上传会记下来：文件名、时间、解析结果存在浏览器本地，下次打开自动恢复；改完 Excel 重新上传，会报“上次 X 处错误 → 本次 Y 处，已修复 Z 处”。⑦ 在线修改：对照表的“Excel 值”格子点开就能改，改完 ST 代码、校验、圈图同步更新；改原表会重算该列校验，改填充版不重算（校验按原表）；“撤销全部在线修改”可恢复。⑧ 复制：整 PRG 一键复制在上面；下面“分段复制”每个臂长各一个按钮，复制该臂长一段。
   </div>
 </div>
 
