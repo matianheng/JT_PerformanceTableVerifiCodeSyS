@@ -235,6 +235,17 @@ function parseWorkbook(wb) {
 }
 
 /* ---------------- 校验（只按通用规则） ---------------- */
+/* 本列正常步长：相邻两行递减值的 75 分位（下限 1000），用于判断尖峰（升、降都远大于正常步长） */
+function colDecScale(vals) {
+  const ds = [];
+  for (let i = 1; i < vals.length; i++) {
+    if (typeof vals[i] === 'number' && typeof vals[i - 1] === 'number' && vals[i - 1] !== 0 && vals[i] !== 0 && vals[i - 1] > vals[i]) ds.push(vals[i - 1] - vals[i]);
+  }
+  if (!ds.length) return 1000;
+  ds.sort((a, b) => a - b);
+  return Math.max(1000, ds[Math.floor(ds.length * 0.75)] || 1000);
+}
+
 function validate(found) {
   const list = [];
   const add = (level, sheet, prg, cell, text) => list.push({ level, sheet, prg, cell, text });
@@ -310,11 +321,12 @@ function validate(found) {
     const colIdxs = (f.groupIdxs[0] || []).concat(f.groupIdxs[1] || []);
     colIdxs.forEach(ci => {
       const boom = cleanBoom(c1.booms[ci]);
-      let prev = null, prevR = null;
+      let prev = null, prevR = null, prevCell = null, prevPrev = null, prevI = -1;
       const colVals = c1.rows.map(r => ({ rad: r.radius, v: r.vals[ci] }));
       const present = colVals.filter(x => x.v !== null && x.v !== undefined);
       const minI = present.length ? colVals.indexOf(present[0]) : -1;
       const maxI = present.length ? colVals.indexOf(present[present.length - 1]) : -1;
+      const scale = colDecScale(colVals.map(x => x.v));
       colVals.forEach((x, i) => {
         const cell = colLetter(f.ampCol + 1 + ci) + (c1.boomRow + 2 + i);
         if (typeof x.v === 'string') {
@@ -329,8 +341,22 @@ function validate(found) {
           return;
         }
         if (x.v % 100 !== 0) add('warn', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + x.rad + 'm = ' + x.v + '，不是 100 的倍数（请核对纸质表）');
-        if (prev !== null && x.v > prev) add('err', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律');
-        prev = x.v; prevR = x.rad;
+        // 孤立低点：上一格比它上下两格都低（错数常是孤立一格，邻格是好的锚点）；但若本格是尖峰（升、降都远大于本列正常步长），则上一格不是低点
+        let prevIsDip = false;
+        if (prev !== null && prevPrev !== null && i === prevI + 1) {
+          const dip = Math.min(prevPrev, x.v) - prev;
+          if (dip > 0) {
+            const nextV = (i + 1 < colVals.length) ? colVals[i + 1].v : null;
+            const spike = typeof nextV === 'number' && nextV !== 0 && (x.v - prev) > 3 * scale && (x.v - nextV) > 3 * scale;
+            if (typeof nextV === 'number' && nextV !== 0 && !spike) {
+              prevIsDip = true;
+              if (dip > 1000) add('err', f.sheet, f.prg, prevCell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表');
+              else add('warn', f.sheet, f.prg, prevCell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表');
+            }
+          }
+        }
+        if (prev !== null && x.v > prev && !prevIsDip) add('err', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律');
+        prevPrev = prev; prev = x.v; prevR = x.rad; prevCell = cell; prevI = i;
       });
     });
     // 首行（最小幅度）检查：同幅度下臂长越长载荷应越小；首行值与次行值比值异常（只查原表）
@@ -445,7 +471,8 @@ function columnIssues(grp, boom) {
   const present = colVals.filter(x => typeof x.v === 'number' && x.v !== 0);
   const minI = present.length ? colVals.indexOf(present[0]) : -1;
   const maxI = present.length ? colVals.indexOf(present[present.length - 1]) : -1;
-  let prev = null, prevR = null;
+  const scale = colDecScale(colVals.map(x => x.v));
+  let prev = null, prevR = null, prevCell = null, prevPrev = null, prevI = -1;
   colVals.forEach((x, i) => {
     const cell = excelCellFor(grp, boom, x.rad);
     if (typeof x.v === 'string') {
@@ -458,8 +485,21 @@ function columnIssues(grp, boom) {
     }
     if (typeof x.v !== 'number') return;
     if (x.v % 100 !== 0) out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + x.rad + 'm = ' + x.v + '，不是 100 的倍数（请核对纸质表）' });
-    if (prev !== null && x.v > prev) out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律' });
-    prev = x.v; prevR = x.rad;
+    let prevIsDip = false;
+    if (prev !== null && prevPrev !== null && i === prevI + 1) {
+      const dip = Math.min(prevPrev, x.v) - prev;
+      if (dip > 0) {
+        const nextV = (i + 1 < colVals.length) ? colVals[i + 1].v : null;
+        const spike = typeof nextV === 'number' && nextV !== 0 && (x.v - prev) > 3 * scale && (x.v - nextV) > 3 * scale;
+        if (typeof nextV === 'number' && nextV !== 0 && !spike) {
+          prevIsDip = true;
+          if (dip > 1000) out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell: prevCell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表' });
+          else out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell: prevCell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表' });
+        }
+      }
+    }
+    if (prev !== null && x.v > prev && !prevIsDip) out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律' });
+    prevPrev = prev; prev = x.v; prevR = x.rad; prevCell = cell; prevI = i;
   });
   return out;
 }
@@ -693,9 +733,38 @@ function cellIssueLevel(grp, boom, rad) {
   if (typeof v === 'string') return 'err';
   const vals = prgScope().map(r => cellVal(grp, boom, r));
   const idx = prgScope().indexOf(rad);
-  let prev = null;
-  for (let i = 0; i < idx; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) prev = vals[i]; }
-  if (typeof v === 'number' && v !== 0 && prev !== null && v > prev) return 'err';
+  const scale = colDecScale(vals);
+  // 孤立低点：本格比上下两格都低（邻格是好的锚点，孤立一格错数）；但若下一格是尖峰（升、降都远大于本列正常步长），则本格不是低点
+  if (typeof v === 'number' && v !== 0 && idx > 0 && idx < vals.length - 1) {
+    const above = vals[idx - 1], below = vals[idx + 1];
+    if (typeof above === 'number' && above !== 0 && typeof below === 'number' && below !== 0) {
+      const dip = Math.min(above, below) - v;
+      if (dip > 0) {
+        const d2 = vals[idx + 2];
+        if (typeof d2 === 'number' && d2 !== 0) {
+          const spike = (below - v) > 3 * scale && (below - d2) > 3 * scale;
+          if (!spike) return dip > 1000 ? 'err' : 'warn';
+        }
+      }
+    }
+  }
+  let prev = null, prevJ = -1;
+  for (let i = 0; i < idx; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) { prev = vals[i]; prevJ = i; } }
+  if (typeof v === 'number' && v !== 0 && prev !== null && v > prev) {
+    // 上一格若是孤立低点，本格的“上升”是假的（低点本身会报）；若本格是尖峰，上升是真的
+    let prevIsDip = false;
+    if (prevJ > 0) {
+      const pp = vals[prevJ - 1];
+      if (typeof pp === 'number' && pp !== 0 && prev < Math.min(pp, v)) {
+        const d2 = vals[idx + 1];
+        if (typeof d2 === 'number' && d2 !== 0) {
+          const spike = (v - prev) > 3 * scale && (v - d2) > 3 * scale;
+          if (!spike) prevIsDip = true;
+        }
+      }
+    }
+    if (!prevIsDip) return 'err';
+  }
   if (typeof v === 'number' && v !== 0 && v % 100 !== 0) return 'warn';
   if (v === 0) {
     let hasBefore = false, hasAfter = false;
