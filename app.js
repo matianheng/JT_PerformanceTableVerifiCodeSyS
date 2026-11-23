@@ -127,15 +127,16 @@ function parseTitleForPrg(leftTitle, rightTitle) {
   const t = String(leftTitle || '') + ' ' + String(rightTitle || '');
   const spanM = String(leftTitle || '').match(/跨距([\d.]+)m/);
   const span = spanM ? parseFloat(spanM[1]) : null;
-  const out = span === 8.4 ? 'F' : span === 5.5 ? 'H' : null;
+  // 只认跨距数字区分：>=8m 为全伸 F，<=6m 为半伸 H（Excel 里是 8.4/5.5；8.8 也按全伸认）
   const cwM = String(rightTitle || leftTitle || '').match(/(\d+(?:\.\d+)?)吨配重/);
   const cw = cwM ? parseFloat(cwM[1]) : null;
   const num = cw === 38 ? '38' : cw === 27 ? '27' : cw === 20.5 ? '21' : cw === 14 ? '14' : cw === 0 ? '00' : null;
   const backM = t.match(/后移(\d+)mm/);
   const back = backM ? parseInt(backM[1], 10) : null;
   const hy = back === 800 ? 'HY' : '';
+  const out = span === null ? null : span >= 8 ? 'F' : span <= 6 ? 'H' : null;
   if (!out || !num) return null;
-  return { prg: out + 'C' + num + hy, span, cw, back };
+  return { prg: out + 'C' + num + hy, span, cw, back, out };
 }
 
 function parseWorkbook(wb) {
@@ -162,7 +163,7 @@ function parseWorkbook(wb) {
       if (!m) return;
       const fix = fixDupRadius(c1);
       sheetData[m.prg] = {
-        label: (m.span === 8.4 ? '全伸 ' : '半伸 ') + m.cw + 't 后移' + (m.back === null ? '—' : m.back),
+        label: (m.out === 'F' ? '全伸 ' : '半伸 ') + m.cw + 't 后移' + (m.back === null ? '—' : m.back),
         titleRow: c1.titleRow + 1,
         orig: toGroups(c1), filled: toGroups(c3),
       };
@@ -182,8 +183,8 @@ function validate(found) {
     const c1 = f.c1;
     // 标题文字与跨距不符
     const titleStr = String(c1.title || '');
-    if (f.span === 5.5 && titleStr.indexOf('支腿全伸') === 0) add('err', f.sheet, f.prg, colLetter(f.ampCol + 2) + f.titleRow, tag + ' 半伸表标题误写“支腿全伸侧方跨距5.5m”，应为“支腿半伸”');
-    if (f.span === 8.4 && titleStr.indexOf('支腿半伸') === 0) add('err', f.sheet, f.prg, '标题行', tag + ' 全伸表标题误写“支腿半伸”');
+    if (f.span !== null && f.span <= 6 && titleStr.indexOf('支腿全伸') === 0) add('err', f.sheet, f.prg, colLetter(f.ampCol + 2) + f.titleRow, tag + ' 半伸表标题误写“支腿全伸侧方跨距5.5m”，应为“支腿半伸”');
+    if (f.span !== null && f.span >= 8 && titleStr.indexOf('支腿半伸') === 0) add('err', f.sheet, f.prg, '标题行', tag + ' 全伸表标题误写“支腿半伸”');
     // 配重分量和
     const cwM = titleStr.match(/（基本配重0吨\+([^）]+)/);
     const tonM = titleStr.match(/(\d+(?:\.\d+)?)吨配重/);
