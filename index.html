@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>JTC100G6 性能表动态校验 + ST 代码生成</title>
+<title>起重机性能表通用校验 + ST 代码生成</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; padding: 16px; background: #f4f4f4; color: #222; }
@@ -54,12 +54,12 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>JTC100G6 性能表动态校验 + ST 代码生成</h1>
-  <div class="sub">上传性能表 Excel，页面就地解析、校验、生成 CoDeSys ST 代码。打开时是空的，什么结果都没有，传了你的 Excel 才开始算；也可以点“使用内置数据”载入 2026-11-23 版（早上给的那份表）。<span class="badge" id="dataBadge">尚未上传</span></div>
+  <h1>起重机性能表通用校验 + ST 代码生成</h1>
+  <div class="sub">上传任意车型的性能表 Excel，页面就地解析、校验、生成 CoDeSys ST 代码。打开时是空的，什么都不知道，传了你的 Excel 才开始算；换个车型的表，改一下下面的程序配置就能用。<span class="badge" id="dataBadge">尚未上传</span></div>
 
   <h2 style="border-top:none;padding-top:0">1. 上传性能表 Excel</h2>
   <div class="drop" id="drop">把 .xlsx 文件拖到这里，或点击选择文件<input type="file" id="fileInput" accept=".xlsx,.xls"></div>
-  <div class="sec"><div class="info" id="fileInfo">尚未上传。请把性能表 .xlsx 拖到上面，或点“使用内置数据”载入 2026-11-23 版。上传后此处显示文件名与解析结果。</div><div class="rowbtns"><button id="useBuiltin">使用内置数据（2026-11-23 版）</button><button id="resetData">↩ 清除上次上传（回到空状态）</button></div></div>
+  <div class="sec"><div class="info" id="fileInfo">尚未上传。请把性能表 .xlsx 拖到上面。上传后此处显示文件名与解析结果。</div><div class="rowbtns"><button id="resetData">↩ 清除上次上传（回到空状态）</button></div></div>
 
   <h2>2. 校验结果</h2>
   <div class="sec"><div class="info" id="validSummary">尚未上传 Excel，请先在第 1 节上传文件。</div><div id="validList"></div></div>
@@ -72,24 +72,39 @@
   </div>
 
   <h2>3. 生成 ST 代码</h2>
-  <div class="sec"><div class="lab">臂数</div>
+  <div class="sec"><div class="lab">程序配置（改完立即生效，存在浏览器本地）</div>
+    <div class="inputs">
+      <label>全伸组数组名<input id="cfgArrFull" type="text" value="Full_Weight" style="width:170px"></label>
+      <label>快伸组数组名<input id="cfgArrHalf" type="text" value="Half_Weight" style="width:170px"></label>
+      <label>臂长点数组名<input id="cfgArrArm" type="text" value="Arm_Length_Weight_Point" style="width:210px"></label>
+      <label>幅度点数组名<input id="cfgArrScope" type="text" value="Scope_Weight_Point" style="width:210px"></label>
+    </div>
+    <div class="inputs">
+      <label>写入条件（IF 后面的条件）<input id="cfgGuard" type="text" value="NOT TeleOut_Fast_Control_LMI" style="width:260px"></label>
+      <label>后移后缀<input id="cfgHy" type="text" value="HY" style="width:80px"></label>
+      <label>幅度点上限 IEweightCol（0=不限）<input id="cfgCap" type="number" value="30" style="width:80px"></label>
+      <button id="resetCfg">恢复默认配置</button>
+    </div>
+    <div class="inputs" id="prefixBox"></div>
+    <div class="sub">PRG 前缀：每张表一个，拼在工况名前（如 JTC100 + FC14）。不填就只有 FC14 这种工况名。数组名、写入条件、后缀、上限改完立即反映在下面的代码里。</div>
+  </div>
+  <div class="sec"><div class="lab">表</div>
     <div class="btns" id="sheetBtns"></div>
   </div>
-  <div class="sec"><div class="lab">工况 PRG（F=全伸腿，H=半伸腿；HY=后移800mm，无HY=后移0mm；数字=配重 00/14/21/27/38）</div>
+  <div class="sec"><div class="lab">工况 PRG（F=跨距大的，H=跨距小的；后缀=后移>0；数字=配重，20.5t 记作 21）</div>
     <div class="btns" id="prgBtns"></div>
   </div>
   <div class="sec"><div class="lab">数据源</div>
     <div class="btns" id="srcBtns">
       <button data-src="orig" class="on">原表（每块最左边的完整表）</button>
-      <button data-src="filled">力限填充版（原表 ×1.33，臂长网格可能不同）</button>
+      <button data-src="filled">填充版（原表 × 系数，臂长网格可能不同）</button>
     </div>
   </div>
   <div class="sec"><div class="info" id="blockInfo"></div><div class="warn" id="blockWarn" style="display:none"></div></div>
   <div class="sec"><div class="lab">组别</div>
     <div class="btns tabs" id="grpBtns">
-      <button data-grp="Full" class="on">全伸组 Full_Weight</button>
-      <button data-grp="Half">快伸组 Half_Weight</button>
-      <button data-grp="Third">第三组 Third_Weight（待确认）</button>
+      <button data-grp="Full" class="on">全伸组</button>
+      <button data-grp="Half">快伸组</button>
     </div>
   </div>
   <div class="sec"><div class="lab">臂长（点击后下方出代码）</div>
@@ -98,7 +113,7 @@
   <div class="sec">
     <div class="rowbtns">
       <button class="copy" id="copyOne">📋 复制本臂长代码</button>
-      <button class="copy" id="copyAll" style="background:#222;border-color:#222">📋 复制本 PRG 全部（含臂长点/幅度点/Full/Half）</button>
+      <button class="copy" id="copyAll" style="background:#222;border-color:#222">📋 复制本 PRG 全部（含臂长点/幅度点/全伸/快伸）</button>
     </div>
     <pre id="out">请先选臂长。</pre>
     <div id="warnOut"></div>
@@ -113,7 +128,7 @@
   <div class="sec">
     <div class="inputs">
       <label>组别
-        <select id="lkGrp"><option value="Full">全伸组</option><option value="Half">快伸组</option><option value="Third">第三组</option></select>
+        <select id="lkGrp"><option value="Full">全伸组</option><option value="Half">快伸组</option></select>
       </label>
       <label>臂长 (m)<input id="lkBoom" type="number" step="0.1" value="28.8"></label>
       <label>幅度 (m)<input id="lkRad" type="number" step="0.1" value="10"></label>
@@ -124,16 +139,11 @@
   </div>
 
   <div class="foot">
-    约定：① 幅度点按程序实际值：五臂 3.0～44.0（31 点）、六臂 3.0～52.0（35 点），FC38HY 首块多一个 2.5m 点；Excel 里没有的幅度填 0。② Full_Weight 行号 = 全伸组内序号（0~8，第 9 行全 0）；Half_Weight 第 0 行是 13.0m（与全伸组同值），第 1~6 行是快伸组臂长，其余行全 0。③ 第三组在示例代码里没有对应数组，暂用 Third_Weight 占位。④ PRG 与 Excel 块的对应按标题自动识别：跨距 8.4m=全伸（F）、5.5m=半伸（H）；配重取右表（14t/20.5t→21）；后移 800mm=HY。标题里“全伸/半伸”文字不可靠（六臂半伸表全写错），以跨距为准。⑤ 校验规则：同臂长随幅度增大不得上升；数值应为 100 的倍数；幅度不得重复/缺失；标题配重分量和应等于吨数；右表有值格须与原表一致；填充版系数按 1.33 核对。⑥ 上传会记下来：文件名、时间、解析结果存在浏览器本地，下次打开自动恢复；改完 Excel 重新上传，会报“上次 X 处错误 → 本次 Y 处，已修复 Z 处”。⑦ 在线修改：对照表的“Excel 值”格子点开就能改，改完 ST 代码、校验、圈图同步更新；改原表会重算该列校验，改填充版不重算（校验按原表）；“撤销全部在线修改”可恢复。⑧ 复制：整 PRG 一键复制在上面；下面“分段复制”每个臂长各一个按钮，复制该臂长一段。
+    约定：① 表结构要求：每张表里每块以含“幅度(m)”的行作表头，上一行是标题，下一行（有序号行时下两行）是臂长行，数据行到“倍率”行结束；横向多个复本按 24 列步长排（原表、右表、填充版）。② 臂长分组：同一块里的臂长按递减处自动分段，第 1 组进全伸数组，第 2 组进快伸数组；第 3 组及以后程序里没有对应数组，不出代码（在当前表信息里注明）。③ 幅度点：取各块出现最多的幅度序列作主序列；不在主序列内的幅度行（如 2.5m）作附加列；主序列不足 IEweightCol+1 个时按末尾步长顺延补齐（补 0）。④ PRG 与 Excel 块的对应按标题自动识别：跨距最大的=全伸（F）、最小的=半伸（H），标题里“全伸/半伸”文字不可靠；配重取右表标题，20.5t 记作 21；后移>0 加后缀（默认 HY，可改）。⑤ 校验规则（通用）：同臂长随幅度增大不得上升；数值应为 100 的倍数；幅度不得重复/缺失；标题配重分量和应等于吨数；左右表标题配重不一致要提示；右表有值格须与原表一致；填充版与原表的比值全文件应一致。⑥ 上传会记下来：文件名、时间、解析结果存在浏览器本地，下次打开自动恢复；改完 Excel 重新上传，会报“上次 X 处错误 → 本次 Y 处，已修复 Z 处”。⑦ 在线修改：对照表的“Excel 值”格子点开就能改，改完 ST 代码、校验、圈图同步更新；改原表会重算该列校验，改填充版不重算（校验按原表）；“撤销全部在线修改”可恢复。⑧ 复制：整 PRG 一键复制在上面；下面“分段复制”每个臂长各一个按钮，复制该臂长一段。⑨ 程序配置存在浏览器本地，换电脑/换浏览器要重新填；配置不跟着 Excel 文件走。
   </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="data/data_5a.js"></script>
-<script src="data/data_5b.js"></script>
-<script src="data/data_6a.js"></script>
-<script src="data/data_6b.js"></script>
-<script src="data/data_issues.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
