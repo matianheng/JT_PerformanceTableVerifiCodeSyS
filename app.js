@@ -6,6 +6,7 @@
    组别：每块的臂长按“递减处分段”自动分出多组；第 1 组→全伸数组，第 2 组→快伸数组，其余组程序无对应数组，只记录、不出代码。 */
 const LS_KEY = 'jt_perf_upload_v2';   // localStorage：上次上传的 Excel 解析结果（v1 旧结构已废弃，不再读）
 const CFG_KEY = 'jt_perf_cfg_v1';     // localStorage：程序配置
+const PROG_KEY = 'jt_prog_v1';        // localStorage：上次上传的程序解析结果（POU 表数据）
 const DEFAULT_CFG = { arrFull: 'Full_Weight', arrHalf: 'Half_Weight', arrArm: 'Arm_Length_Weight_Point', arrScope: 'Scope_Weight_Point', guard: 'NOT TeleOut_Fast_Control_LMI', hy: 'HY', cap: 30, prefix: {} };
 
 function loadCfg() {
@@ -17,8 +18,10 @@ function loadCfg() {
 }
 function saveCfg() { try { localStorage.setItem(CFG_KEY, JSON.stringify(state.cfg)); } catch (e) { /* 存不下不影响使用 */ } }
 
-let state = { data: null, dataLabel: '', sheet: null, prg: null, src: 'orig', grp: 'Full', boom: null, fileMeta: null, edits: {}, cfg: loadCfg() };
-let issues = [];   // {level:'err'|'warn'|'info', sheet, prg, cell, text}
+let state = { data: null, dataLabel: '', sheet: null, prg: null, src: 'orig', grp: 'Full', boom: null, fileMeta: null, edits: {}, cfg: loadCfg(), program: null };
+let issues = [];   // 显示的问题列表 = 趋势校验 + 程序对比（合并后）
+let issuesTrend = []; // 只含趋势校验的问题（不含程序对比）；issues = mergeProgramDiffs(issuesTrend)
+let issuesTrendOrig = []; // 上传 Excel 时的趋势问题（撤销在线修改时恢复；与 dataOrig 对应）
 let issuesOrig = null;  // 载入/上传时的原始校验结果（撤销在线修改时恢复）
 let dataOrig = null;    // 载入/上传时的数据深拷贝（撤销在线修改时恢复）
 
@@ -541,12 +544,13 @@ function applyEdit(grp, boom, rad, newVal) {
   state.edits[key] = { grp, boom: String(boom), rad, old: oldVal, new: newVal };
   if (state.src === 'orig') {
     const needle = '臂长 ' + cleanBoom(parseFloat(boom)) + 'm、幅度 ';
-    issues = issues.filter(i => !(i.sheet === state.sheet && i.prg === state.prg && (i.text.indexOf(needle) >= 0 || i.text.indexOf('同幅度 ') >= 0 || i.text.indexOf('是下一行 ') >= 0)));
+    issuesTrend = issuesTrend.filter(i => !(i.sheet === state.sheet && i.prg === state.prg && (i.text.indexOf(needle) >= 0 || i.text.indexOf('同幅度 ') >= 0 || i.text.indexOf('是下一行 ') >= 0)));
     ['Full', 'Half'].forEach(g => {
       const bl = block()[state.src][g].booms.map(String);
-      if (bl.includes(String(boom)) || (g === 'Half' && String(boom) === halfZero())) issues = issues.concat(columnIssues(g, boom));
+      if (bl.includes(String(boom)) || (g === 'Half' && String(boom) === halfZero())) issuesTrend = issuesTrend.concat(columnIssues(g, boom));
     });
-    ['Full', 'Half'].forEach(g => { issues = issues.concat(firstRowIssues(g)); });
+    ['Full', 'Half'].forEach(g => { issuesTrend = issuesTrend.concat(firstRowIssues(g)); });
+    issues = mergeProgramDiffs(issuesTrend); // 改过的格与程序的对比跟着重算
   }
   renderValidation(); renderOut(); renderEdits(); drawErrorImage();
   computeCircleTables(); renderCircleJump();
@@ -555,7 +559,9 @@ function undoEdits() {
   if (!dataOrig) return;
   state.data = JSON.parse(JSON.stringify(dataOrig));
   state.edits = {};
-  issues = issuesOrig ? JSON.parse(JSON.stringify(issuesOrig)) : [];
+  issuesTrend = JSON.parse(JSON.stringify(issuesTrendOrig));
+  issues = mergeProgramDiffs(issuesTrend);
+  issuesOrig = JSON.parse(JSON.stringify(issues));
   renderValidation(); renderAll(); renderEdits(); drawErrorImage();
   computeCircleTables(); renderCircleJump();
 }
@@ -731,6 +737,11 @@ function renderSegments() {
 function cellIssueLevel(grp, boom, rad) {
   const v = cellVal(grp, boom, rad);
   if (typeof v === 'string') return 'err';
+  // 程序对比（主校验）：原表里本格与程序的值不同，直接标红
+  if (state.program && state.src === 'orig') {
+    const pv = programValue(grp, boom, rad);
+    if (pv !== null && typeof v === 'number' && v !== pv) return 'err';
+  }
   const vals = prgScope().map(r => cellVal(grp, boom, r));
   const idx = prgScope().indexOf(rad);
   const scale = colDecScale(vals);
@@ -924,10 +935,10 @@ function renderValidation() {
   $('validSummary').innerHTML = '校验完成：🔴 确认错误 <b>' + errs + '</b> 处，🟡 待确认 <b>' + warns + '</b> 处，ℹ️ 提示 <b>' + infos + '</b> 处。红色先改，黄色核对纸质表。';
   if (!issues.length) { $('validList').innerHTML = '<div class="info">未发现问题。</div>'; return; }
   let html = '<table><tr><th>级别</th><th>表 / 工况</th><th>位置</th><th>问题</th></tr>';
-  issues.forEach(i => {
+  issues.slice(0, 1000).forEach(i => {
     html += '<tr class="lvl-' + i.level + '"><td>' + (i.level === 'err' ? '🔴 错误' : i.level === 'warn' ? '🟡 待确认' : 'ℹ️ 提示') + '</td><td>' + esc(i.sheet + ' · ' + i.prg) + '</td><td>' + esc(i.cell || '—') + '</td><td>' + esc(i.text) + '</td></tr>';
   });
-  $('validList').innerHTML = html + '</table>';
+  $('validList').innerHTML = html + '</table>' + (issues.length > 1000 ? '<div class="info">共 ' + issues.length + ' 条，仅显示前 1000 条；圈图里全部标红，分表差异见第 1 节的程序对比。</div>' : '');
 }
 /* 配置区：每张表一个 PRG 前缀输入框（上传后出现；改完立即反映在工况名和代码里） */
 function renderPrefixBox() {
@@ -948,7 +959,7 @@ function renderAll() { renderSheets(); renderPrgs(); renderInfo(); renderBooms()
 /* ---------------- 上传 ---------------- */
 function saveUpload(fileName) {
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify({ name: fileName, time: Date.now(), data: state.data, issues }));
+    localStorage.setItem(LS_KEY, JSON.stringify({ name: fileName, time: Date.now(), data: state.data, issues, issuesTrend }));
   } catch (e) { /* 存不下（如浏览器禁了本地存储）不影响使用，只是下次打开恢复不了 */ }
 }
 function useUploaded(wb, fileName, fileSize) {
@@ -964,7 +975,10 @@ function useUploaded(wb, fileName, fileSize) {
     state.fileMeta = { name: fileName, time: Date.now(), size: fileSize || 0 };
     state.dataLabel = '已上传：' + fileName;
     $('dataBadge').textContent = '已上传文件';
-    issues = validate(found);
+    issuesTrend = validate(found);
+    issuesTrendOrig = JSON.parse(JSON.stringify(issuesTrend));
+    if (state.program) rebuildProgramMap(); // Excel 换了，程序 POU 的对应关系要重算
+    issues = mergeProgramDiffs(issuesTrend);
     issuesOrig = JSON.parse(JSON.stringify(issues));
     const errs = issues.filter(i => i.level === 'err').length;
     const prevErrs = prevIssues.filter(i => i.level === 'err').length;
@@ -979,6 +993,7 @@ function useUploaded(wb, fileName, fileSize) {
     if (!data.sheets[state.sheet][state.prg]) state.prg = Object.keys(data.sheets[state.sheet])[0];
     state.boom = null;
     renderPrefixBox();
+    renderProgInfo();
     renderValidation(); renderAll();
   } catch (e) {
     $('fileInfo').innerHTML = '<b>解析出错：</b>' + esc(e.message);
@@ -989,6 +1004,266 @@ function handleFile(file) {
   const rd = new FileReader();
   rd.onload = e => { try { useUploaded(XLSX.read(e.target.result, { type: 'array' }), file.name, file.size); } catch (err) { $('fileInfo').innerHTML = '<b>读取失败：</b>' + esc(err.message); } };
   rd.readAsArrayBuffer(file);
+}
+
+/* ---------------- 程序文件上传：Excel 里的值 vs 程序里写的值，逐格对比，差异标红 ----------------
+   两种格式都认：CoDeSys 导出的 .export（TextBlob + Name 元素定归属——实现体不一定在声明体后面，
+   不能按 PROGRAM 头切段）和 PLCopenXML .xml（<pou name="Working_Table_...">）。
+   数组名取配置里的 arrFull/arrHalf/arrArm/arrScope（与 ST 生成保持一致）。
+   对齐方式：按（臂长，幅度）数值对齐——程序用自己的 Arm/Scope 数组找行列号，Excel 用 cellVal；
+   程序的 2.5m 列与 Excel 的 2.5m 列对上，不会错位。 */
+function parseProgram(text) {
+  const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const cfg = state.cfg;
+  const reFull = new RegExp(escRe(cfg.arrFull) + '\\[(\\d+),(\\d+)\\]:=\\s*(-?\\d+)\\s*;', 'g');
+  const reHalf = new RegExp(escRe(cfg.arrHalf) + '\\[(\\d+),(\\d+)\\]:=\\s*(-?\\d+)\\s*;', 'g');
+  const reArm = new RegExp(escRe(cfg.arrArm) + '\\[(\\d+)\\]:=\\s*([\\d.]+)\\s*;', 'g');
+  const reScope = new RegExp(escRe(cfg.arrScope) + '\\[(\\d+)\\]:=\\s*([\\d.]+)\\s*;', 'g');
+  const hasFull = new RegExp(escRe(cfg.arrFull) + '\\[\\d+,\\d+\\]:=\\s*\\d+');
+  function parsePouBody(body) {
+    // Arm 赋值按出现顺序分块（索引归零处分块）：第一块=全伸臂长，第二块=快伸臂长
+    const blocks = []; let cur = {}, last = -1;
+    [...body.matchAll(reArm)].forEach(m => {
+      const i = parseInt(m[1], 10), v = parseFloat(m[2]);
+      if (i <= last && Object.keys(cur).length) { blocks.push(cur); cur = {}; }
+      cur[i] = v; last = i;
+    });
+    if (Object.keys(cur).length) blocks.push(cur);
+    const scope = {};
+    [...body.matchAll(reScope)].forEach(m => { scope[parseInt(m[1], 10)] = parseFloat(m[2]); });
+    const full = {}, half = {};
+    [...body.matchAll(reFull)].forEach(m => { full[m[1] + ',' + m[2]] = parseInt(m[3], 10); });
+    [...body.matchAll(reHalf)].forEach(m => { half[m[1] + ',' + m[2]] = parseInt(m[3], 10); });
+    return { fullArm: blocks[0] || {}, halfArm: blocks[1] || blocks[0] || {}, scope, full, half };
+  }
+  const pous = {};
+  // .export：TextBlob 里找含赋值的那块，归属取最近的上一个 Name 元素
+  const names = [];
+  const nameRe = /<Single[^>]*Name="Name"[^>]*>([^<]*)<\/Single>/g;
+  let m;
+  while ((m = nameRe.exec(text))) names.push({ pos: m.index, name: m[1] });
+  if (names.length) {
+    const blobRe = /<Single[^>]*Name="TextBlobForSerialisation"[^>]*>([\s\S]*?)<\/Single>/g;
+    while ((m = blobRe.exec(text))) {
+      const body = m[1];
+      if (!hasFull.test(body)) continue;
+      let nm = null;
+      for (let i = names.length - 1; i >= 0; i--) { if (names[i].pos < m.index) { nm = names[i].name; break; } }
+      if (!nm || !/^Working_Table_/.test(nm)) continue;
+      pous[nm] = parsePouBody(body);
+    }
+  }
+  // PLCopenXML：<pou name="Working_Table_...">…</pou>
+  if (!Object.keys(pous).length) {
+    const parts = text.split(/<pou name="(Working_Table_[A-Za-z0-9]+)"/);
+    for (let i = 1; i < parts.length - 1; i += 2) {
+      const body = parts[i + 1].split('</pou>')[0];
+      if (hasFull.test(body)) pous[parts[i]] = parsePouBody(body);
+    }
+  }
+  if (!Object.keys(pous).length) throw new Error('未识别的程序文件格式：没找到 Working_Table_ 工况表（请上传 CoDeSys 导出的 .export 或 PLCopenXML .xml，并确认第 3 节的数组名与程序里一致）');
+  return pous;
+}
+/* 程序 POU 与 Excel 块的对应：精确匹配（配置前缀 + 工况键）优先；后备按工况键后缀匹配，
+   臂长表最贴合的胜出（五臂/六臂同名工况靠臂长区分，正确匹配 9/9、错表约 4/9）。 */
+function rebuildProgramMap() {
+  if (!state.program || !state.data) return;
+  const map = {};
+  const missing = [];
+  const pous = state.program.pous;
+  Object.keys(state.data.sheets).forEach(sh => {
+    Object.keys(state.data.sheets[sh]).forEach(key => {
+      const blk = state.data.sheets[sh][key];
+      const disp = displayPrg(sh, blk);
+      let found = pous['Working_Table_' + disp] ? 'Working_Table_' + disp : null;
+      if (!found) {
+        const cands = Object.keys(pous).filter(n => {
+          const rest = n.slice('Working_Table_'.length);
+          return rest === key || rest.endsWith(key);
+        });
+        let best = null, bestScore = -1;
+        const booms = blk.orig.Full.booms.map(b => cleanBoom(b));
+        const need = Math.max(3, Math.ceil(booms.length * 0.6));
+        cands.forEach(n => {
+          const arms = Object.values(pous[n].fullArm || {});
+          let score = 0;
+          booms.forEach(b => { if (arms.some(a => Math.abs(cleanBoom(a) - b) < 0.06)) score++; });
+          if (score > bestScore) { bestScore = score; best = n; }
+        });
+        if (best && bestScore >= need) found = best;
+      }
+      map[sh + '|' + key] = found || '';
+      if (!found) missing.push(sh + '|' + key);
+    });
+  });
+  state.program.map = map;
+  state.program.missingPrg = missing;
+  const used = new Set(Object.values(map).filter(Boolean));
+  state.program.unmatched = Object.keys(pous).filter(n => !used.has(n)).map(n => n.slice('Working_Table_'.length));
+  state.program._gridCache = {};
+}
+function programPouFor(sh, key) {
+  if (!state.program || !state.data) return null;
+  const hit = (state.program.map || {})[sh + '|' + key];
+  return hit ? hit : null;
+}
+/* 某（表，工况，组）的程序网格：臂长/幅度→行列号 + 值表（带缓存） */
+function programGridFor(sh, key, grp) {
+  if (!state.program) return null;
+  const cacheKey = sh + '|' + key + '|' + grp;
+  const cache = state.program._gridCache || (state.program._gridCache = {});
+  if (cache[cacheKey] !== undefined) return cache[cacheKey];
+  const pouName = programPouFor(sh, key);
+  if (!pouName) { cache[cacheKey] = null; return null; }
+  const P = state.program.pous[pouName];
+  const arm = grp === 'Full' ? P.fullArm : P.halfArm;
+  const armIdx = {};
+  Object.keys(arm).forEach(i => { armIdx[cleanBoom(arm[i])] = parseInt(i, 10); });
+  const scopeIdx = {};
+  Object.keys(P.scope).forEach(i => { scopeIdx[cleanBoom(P.scope[i])] = parseInt(i, 10); });
+  const grid = { armIdx, scopeIdx, arr: grp === 'Full' ? P.full : P.half };
+  cache[cacheKey] = grid;
+  return grid;
+}
+/* 当前选中格的程序值（无对应返回 null）；cellIssueLevel 用 */
+function programValue(grp, boom, rad) {
+  if (!state.program || !state.data || state.src !== 'orig') return null;
+  const grid = programGridFor(state.sheet, state.prg, grp);
+  if (!grid) return null;
+  const r = grid.armIdx[cleanBoom(parseFloat(boom))];
+  const c = grid.scopeIdx[cleanBoom(rad)];
+  if (r === undefined || c === undefined) return null;
+  const v = grid.arr[r + ',' + c];
+  return (typeof v === 'number') ? v : 0;
+}
+/* 全部程序对比问题（只比原表）：每格 Excel 值（cellVal，含 2.5m 附加列）vs 程序值 */
+function programDiffIssues() {
+  const out = [];
+  if (!state.program || !state.data) return out;
+  const saved = { sheet: state.sheet, prg: state.prg, grp: state.grp, src: state.src };
+  state.src = 'orig';
+  const noCounter = {};
+  Object.keys(state.data.sheets).forEach(sh => {
+    Object.keys(state.data.sheets[sh]).forEach(key => {
+      state.sheet = sh; state.prg = key;
+      const blk = state.data.sheets[sh][key];
+      const tag = sh + ' · ' + key + '（R' + blk.titleRow + '）';
+      ['Full', 'Half'].forEach(grp => {
+        state.grp = grp;
+        const grid = programGridFor(sh, key, grp);
+        if (!grid) return;
+        const booms = grp === 'Full' ? blk.orig.Full.booms.map(String) : [halfZero()].concat(blk.orig.Half.booms.map(String));
+        const radii = prgScope();
+        booms.forEach(bm => {
+          const r = grid.armIdx[cleanBoom(parseFloat(bm))];
+          const bShow = cleanBoom(parseFloat(bm));
+          radii.forEach(rad => {
+            const c = grid.scopeIdx[cleanBoom(rad)];
+            const ev = cellVal(grp, bm, rad);
+            if (r === undefined || c === undefined) {
+              if (typeof ev === 'number' && ev !== 0) noCounter[sh + '|' + key] = (noCounter[sh + '|' + key] || 0) + 1;
+              return;
+            }
+            const pv = grid.arr[r + ',' + c];
+            const p = (typeof pv === 'number') ? pv : 0;
+            if (typeof ev === 'string') {
+              out.push({ level: 'err', kind: 'prog', sheet: sh, prg: key, cell: excelCellFor(grp, bm, rad), text: tag + ' 臂长 ' + bShow + 'm、幅度 ' + rad + 'm：Excel 为文本 ' + JSON.stringify(ev) + '，程序为 ' + p + '，请核对纸质表' });
+            } else if (p !== ev) {
+              out.push({ level: 'err', kind: 'prog', sheet: sh, prg: key, cell: excelCellFor(grp, bm, rad), text: tag + ' 臂长 ' + bShow + 'm、幅度 ' + rad + 'm：程序 ' + p + '，Excel ' + ev + '，请核对纸质表' });
+            }
+          });
+        });
+      });
+    });
+  });
+  Object.keys(noCounter).forEach(k => {
+    const [sh, key] = k.split('|');
+    out.push({ level: 'info', kind: 'prog', sheet: sh, prg: key, cell: '', text: sh + ' · ' + key + '（R' + state.data.sheets[sh][key].titleRow + '）有 ' + noCounter[k] + ' 格在程序里没有对应臂长/幅度，未参与对比' });
+  });
+  (state.program.unmatched || []).forEach(n => out.push({ level: 'info', kind: 'prog', sheet: '', prg: n, cell: '', text: '程序里有工况表 ' + n + '，Excel 里没有对应的块，未参与对比' }));
+  (state.program.missingPrg || []).forEach(k => {
+    const [sh, key] = k.split('|');
+    out.push({ level: 'info', kind: 'prog', sheet: sh, prg: key, cell: '', text: sh + ' · ' + key + ' 在 Excel 里有，程序里没有对应的工况表，未参与对比' });
+  });
+  state.sheet = saved.sheet; state.prg = saved.prg; state.grp = saved.grp; state.src = saved.src;
+  return out;
+}
+/* 趋势问题 + 程序对比问题合并：差异问题已含程序值，取代同格的“一格内有文本 / 空白空洞”趋势问题 */
+function mergeProgramDiffs(trend) {
+  const out = trend.slice();
+  if (!state.program || !state.data) return out;
+  const diffs = programDiffIssues();
+  if (!diffs.length) return out;
+  const keys = new Set(diffs.map(d => {
+    const m = d.text.match(/臂长 ([\d.]+)m、幅度 ([\d.]+)m/);
+    return m ? d.sheet + '|' + d.prg + '|' + m[1] + '|' + m[2] : '';
+  }));
+  const kept = out.filter(i => {
+    if (i.text.indexOf('一格内有文本') < 0 && i.text.indexOf('空白空洞') < 0) return true;
+    const m = i.text.match(/臂长 ([\d.]+)m、幅度 ([\d.]+)m/);
+    if (!m) return true;
+    return !keys.has(i.sheet + '|' + i.prg + '|' + m[1] + '|' + m[2]);
+  });
+  return kept.concat(diffs);
+}
+function saveProg() {
+  try {
+    if (!state.program) { localStorage.removeItem(PROG_KEY); return; }
+    const p = state.program;
+    localStorage.setItem(PROG_KEY, JSON.stringify({ name: p.name, time: p.time, size: p.size, format: p.format, pous: p.pous }));
+  } catch (e) { /* 存不下不影响使用 */ }
+}
+function useProgram(text, fileName, fileSize) {
+  const pous = parseProgram(text);
+  const nPou = Object.keys(pous).length;
+  const fmt = text.indexOf('TextBlobForSerialisation') >= 0 ? 'CoDeSys 导出（.export）' : 'PLCopenXML（.xml）';
+  state.program = { name: fileName, time: Date.now(), size: fileSize || 0, format: fmt, pous, map: {}, missingPrg: [], unmatched: [] };
+  rebuildProgramMap();
+  issues = mergeProgramDiffs(issuesTrend);
+  issuesOrig = JSON.parse(JSON.stringify(issues));
+  saveProg();
+  renderProgInfo();
+  renderValidation(); renderAll();
+  computeCircleTables(); renderCircleJump();
+  jumpToFirstErrorTable();
+}
+function handleProgFile(file) {
+  const rd = new FileReader();
+  rd.onload = e => { try { useProgram(e.target.result, file.name, file.size); } catch (err) { $('progInfo').innerHTML = '<b>读取失败：</b>' + esc(err.message); } };
+  rd.onerror = () => { $('progInfo').innerHTML = '<b>读取失败：</b>无法读取该文件。'; };
+  rd.readAsText(file);
+}
+function clearProgram() {
+  state.program = null;
+  try { localStorage.removeItem(PROG_KEY); } catch (e) {}
+  issues = issuesTrend.slice();
+  issuesOrig = JSON.parse(JSON.stringify(issues));
+  renderProgInfo();
+  renderValidation(); renderAll();
+  computeCircleTables(); renderCircleJump();
+}
+function renderProgInfo() {
+  const el = $('progInfo'); if (!el) return;
+  const p = state.program;
+  if (!p) { el.innerHTML = '尚未上传程序文件。上传后逐格对比 Excel 里的值与程序里写的值，差异标红（圈图红圈 + 校验列表红行）。'; return; }
+  const nPou = Object.keys(p.pous).length;
+  if (!state.data) {
+    el.innerHTML = '已载入程序 <b>' + esc(p.name) + '</b>（' + new Date(p.time).toLocaleString() + '，' + esc(p.format) + '，' + nPou + ' 个工况表）。尚未上传 Excel，传了 Excel 才开始对比。';
+    return;
+  }
+  const diffs = issues.filter(i => i.kind === 'prog' && i.level === 'err');
+  const byPrg = {};
+  diffs.forEach(i => { const k = i.sheet + '|' + i.prg; byPrg[k] = (byPrg[k] || 0) + 1; });
+  const parts = Object.entries(byPrg).sort((a, b) => b[1] - a[1]).map(([k, n]) => {
+    const [sh, key] = k.split('|');
+    const blk = state.data.sheets[sh] && state.data.sheets[sh][key];
+    return (blk ? sh.replace('模式', '') + ' ' + displayPrg(sh, blk) : sh + ' ' + key) + ' ' + n;
+  });
+  let html = '已载入程序 <b>' + esc(p.name) + '</b>（' + esc(p.format) + '，' + nPou + ' 个工况表）：与 Excel 共 <b>' + diffs.length + '</b> 处不同，已标红。';
+  if (parts.length) html += '<br>分表：' + esc(parts.join(' · ')) + '。';
+  if ((p.missingPrg || []).length) html += '<br>Excel 有、程序没有的表：' + esc(p.missingPrg.map(k => { const [sh, key] = k.split('|'); return sh.replace('模式', '') + ' ' + key; }).join('、')) + '。';
+  if ((p.unmatched || []).length) html += '<br>程序有、Excel 没有的表：' + esc(p.unmatched.join('、')) + '。';
+  el.innerHTML = html;
 }
 
 /* ---------------- 事件 ---------------- */
@@ -1077,13 +1352,26 @@ $('resetData').onclick = () => {
   location.reload();
 };
 /* 配置输入：改完保存并立即重渲染（工况名、代码、圈图都跟着变） */
+/* 配置改了（前缀/数组名/后缀/上限）→ 程序 POU 的对应关系可能变，重算对比 */
+function refreshAfterCfg() {
+  if (!state.data) return;
+  renderAll();
+  if (state.program) {
+    rebuildProgramMap();
+    issues = mergeProgramDiffs(issuesTrend);
+    issuesOrig = JSON.parse(JSON.stringify(issues));
+    renderProgInfo();
+    renderValidation();
+    computeCircleTables(); renderCircleJump();
+  }
+}
 [['cfgArrFull', 'arrFull'], ['cfgArrHalf', 'arrHalf'], ['cfgArrArm', 'arrArm'], ['cfgArrScope', 'arrScope'], ['cfgGuard', 'guard'], ['cfgHy', 'hy'], ['cfgCap', 'cap']].forEach(([id, key]) => {
   const el = $(id);
   if (!el) return;
   el.addEventListener('input', () => {
     state.cfg[key] = key === 'cap' ? (parseInt(el.value, 10) || 0) : el.value;
     saveCfg();
-    if (state.data) renderAll();
+    refreshAfterCfg();
   });
 });
 $('prefixBox').addEventListener('input', e => {
@@ -1091,12 +1379,12 @@ $('prefixBox').addEventListener('input', e => {
   if (!inp.dataset || inp.dataset.sheet === undefined) return;
   state.cfg.prefix[inp.dataset.sheet] = inp.value;
   saveCfg();
-  if (state.data) { renderPrgs(); renderInfo(); renderOut(); drawErrorImage(); renderCircleJump(); }
+  refreshAfterCfg();
 });
 $('resetCfg').onclick = () => {
   state.cfg = Object.assign({}, DEFAULT_CFG, { prefix: {} });
   saveCfg(); syncCfgInputs(); renderPrefixBox();
-  if (state.data) renderAll();
+  refreshAfterCfg();
 };
 const drop = $('drop');
 drop.addEventListener('click', () => $('fileInput').click());
@@ -1104,6 +1392,15 @@ $('fileInput').addEventListener('change', e => { if (e.target.files[0]) handleFi
 ['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+
+/* 程序文件上传（第 1 节第二个框） */
+const progDrop = $('progDrop');
+progDrop.addEventListener('click', () => $('progInput').click());
+$('progInput').addEventListener('change', e => { if (e.target.files[0]) handleProgFile(e.target.files[0]); });
+['dragover', 'dragenter'].forEach(ev => progDrop.addEventListener(ev, e => { e.preventDefault(); progDrop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => progDrop.addEventListener(ev, e => { e.preventDefault(); progDrop.classList.remove('over'); }));
+progDrop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handleProgFile(f); });
+$('clearProg').onclick = () => clearProgram();
 
 /* ---------------- 启动：先恢复上次上传的 Excel；没有就是空状态，等用户上传 ---------------- */
 (function init() {
@@ -1119,6 +1416,20 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) h
         state.dataLabel = '已上传：' + obj.name + '（已恢复）';
         $('dataBadge').textContent = '已恢复上传';
         issues = obj.issues || [];
+        // 趋势问题单独存一份（合并后的列表里，被程序差异取代的 3 个趋势问题已删掉，清除程序时要靠这份恢复）
+        issuesTrend = obj.issuesTrend || issues.filter(i => i.kind !== 'prog');
+        issuesTrendOrig = JSON.parse(JSON.stringify(issuesTrend));
+        // 恢复上次上传的程序（若有），并按当前程序重算对比；程序没恢复就去掉已存的对比问题
+        let progRestored = false;
+        try {
+          const psaved = typeof localStorage !== 'undefined' && localStorage.getItem(PROG_KEY);
+          if (psaved) {
+            const pobj = JSON.parse(psaved);
+            if (pobj && pobj.pous && Object.keys(pobj.pous).length) { state.program = pobj; progRestored = true; }
+          }
+        } catch (e) { /* 程序恢复失败不影响 Excel */ }
+        if (progRestored) { rebuildProgramMap(); issues = mergeProgramDiffs(issuesTrend); }
+        else issues = issuesTrend.slice();
         issuesOrig = JSON.parse(JSON.stringify(issues));
         $('fileInfo').innerHTML = '已恢复上次上传的 <b>' + esc(obj.name) + '</b>（' + new Date(obj.time).toLocaleString() + '）。改完 Excel 重新上传即可替换；点“清除上次上传”回到空状态。';
         computeCircleTables(); renderCircleJump();
@@ -1126,6 +1437,7 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) h
         if (!state.data.sheets[state.sheet]) state.sheet = Object.keys(state.data.sheets)[0];
         if (!state.data.sheets[state.sheet][state.prg]) state.prg = Object.keys(state.data.sheets[state.sheet])[0];
         renderPrefixBox();
+        renderProgInfo();
         renderValidation(); renderAll();
         return;
       }
@@ -1133,8 +1445,11 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) h
   } catch (e) { /* 恢复失败则进空状态 */ }
   // 没恢复到上传：空状态，不显示任何校验结果
   issues = [];
+  issuesTrend = [];
+  issuesTrendOrig = [];
   issuesOrig = [];
   dataOrig = null;
   state.circleTables = [];
+  renderProgInfo();
   renderValidation(); renderAll();
 })();

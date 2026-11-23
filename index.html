@@ -57,14 +57,18 @@
   <h1>起重机性能表通用校验 + ST 代码生成</h1>
   <div class="sub">上传任意车型的性能表 Excel，页面就地解析、校验、生成 CoDeSys ST 代码。打开时是空的，什么都不知道，传了你的 Excel 才开始算；换个车型的表，改一下下面的程序配置就能用。<span class="badge" id="dataBadge">尚未上传</span></div>
 
-  <h2 style="border-top:none;padding-top:0">1. 上传性能表 Excel</h2>
+  <h2 style="border-top:none;padding-top:0">1. 上传文件</h2>
+  <div class="lab">性能表 Excel（源文件）</div>
   <div class="drop" id="drop">把 .xlsx 文件拖到这里，或点击选择文件<input type="file" id="fileInput" accept=".xlsx,.xls"></div>
   <div class="sec"><div class="info" id="fileInfo">尚未上传。请把性能表 .xlsx 拖到上面。上传后此处显示文件名与解析结果。</div><div class="rowbtns"><button id="resetData">↩ 清除上次上传（回到空状态）</button></div></div>
+  <div class="lab">CoDeSys 程序文件（导出的 .export 或 .xml）</div>
+  <div class="drop" id="progDrop">把程序文件拖到这里，或点击选择文件<input type="file" id="progInput" accept=".export,.xml"></div>
+  <div class="sec"><div class="info" id="progInfo">尚未上传程序文件。上传后逐格对比 Excel 里的值与程序里写的值，差异标红（圈图红圈 + 校验列表红行）。</div><div class="rowbtns"><button id="clearProg">清除程序文件</button></div></div>
 
   <h2>2. 校验结果</h2>
   <div class="sec"><div class="info" id="validSummary">尚未上传 Excel，请先在第 1 节上传文件。</div><div id="validList"></div></div>
   <div class="sec"><div class="lab">错误圈图（当前选中的表：第 3 节选的 PRG 与组别）</div>
-    <div class="sub">红圈=确认错误，黄圈=待确认，蓝点=在线改过的值。改完 Excel 重新上传，或直接在第 3 节的表里改，圈图跟着变。</div>
+    <div class="sub">红圈=确认错误，黄圈=待确认，蓝点=在线改过的值。程序对比的差异也是红圈。改完 Excel 重新上传，或直接在第 3 节的表里改，圈图跟着变。</div>
     <div class="sub" id="imgCount"></div>
     <canvas id="errCanvas"></canvas>
     <div class="rowbtns"><button id="dlImg">⬇ 下载圈图 (PNG)</button><button id="prevErr">◀ 上一张错表</button><button id="nextErr">下一张错表 ▶</button><span class="sub" id="errNavLabel" style="align-self:center"></span></div>
