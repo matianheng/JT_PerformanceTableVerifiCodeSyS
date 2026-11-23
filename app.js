@@ -6,8 +6,39 @@ const SCOPE = [3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 9.0, 10.0,
 const PRG_ORDER = ['FC38HY', 'FC38', 'HC38HY', 'HC38', 'FC27HY', 'FC27', 'HC27HY', 'HC27', 'FC21HY', 'FC21', 'HC21HY', 'HC21', 'FC14HY', 'FC14', 'HC14HY', 'HC14', 'FC00', 'HC00'];
 const PRG_LABEL = { 'FC38HY': '全伸 38t 后移800', 'FC38': '全伸 38t 后移0', 'HC38HY': '半伸 38t 后移800', 'HC38': '半伸 38t 后移0', 'FC27HY': '全伸 27t 后移800', 'FC27': '全伸 27t 后移0', 'HC27HY': '半伸 27t 后移800', 'HC27': '半伸 27t 后移0', 'FC21HY': '全伸 20.5t 后移800', 'FC21': '全伸 20.5t 后移0', 'HC21HY': '半伸 20.5t 后移800', 'HC21': '半伸 20.5t 后移0', 'FC14HY': '全伸 14t 后移800', 'FC14': '全伸 14t 后移0', 'HC14HY': '半伸 14t 后移800', 'HC14': '半伸 14t 后移0', 'FC00': '全伸 0t', 'HC00': '半伸 0t' };
 
-let state = { data: (typeof DEFAULT_DATA !== 'undefined' ? DEFAULT_DATA : null), dataLabel: '内置数据', sheet: '六臂模式', prg: 'FC14', src: 'orig', grp: 'Full', boom: null };
+let state = { data: null, dataLabel: '内置数据', sheet: '六臂模式', prg: 'FC14', src: 'orig', grp: 'Full', boom: null };
 let issues = [];   // {level:'err'|'warn'|'info', sheet, prg, cell, text}
+
+/* 内置数据以紧凑数组形式分块存放在 data/data_*.js（window.__DP），此处展开为 app 用的键值模型 */
+function expandCompact(parts) {
+  if (!parts) return null;
+  const data = { scope: SCOPE.slice(), sheets: {} };
+  const sheetNames = { '5': '五臂模式', '6': '六臂模式' };
+  ['5a', '5b', '6a', '6b'].forEach(tag => {
+    const prgs = parts[tag]; if (!prgs) return;
+    const sheet = sheetNames[tag[0]];
+    const src = tag[1] === 'a' ? 'orig' : 'filled';
+    data.sheets[sheet] = data.sheets[sheet] || {};
+    Object.keys(prgs).forEach(prg => {
+      const p = prgs[prg];
+      data.sheets[sheet][prg] = data.sheets[sheet][prg] || { label: p.label, titleRow: p.titleRow, orig: null, filled: null };
+      const groups = {};
+      Object.keys(p[src]).forEach(g => {
+        const gd = p[src][g];
+        const rows = {};
+        gd.booms.forEach((b, i) => {
+          const vals = {};
+          SCOPE.forEach((rad, j) => { vals[Number(rad).toFixed(1)] = gd.rows[i][j]; });
+          rows[String(b)] = vals;
+        });
+        groups[g] = { booms: gd.booms, rows };
+      });
+      data.sheets[sheet][prg][src] = groups;
+    });
+  });
+  return data;
+}
+state.data = (typeof window !== 'undefined' && window.__DP) ? expandCompact(window.__DP) : null;
 
 /* ---------------- 工具 ---------------- */
 const $ = id => document.getElementById(id);
