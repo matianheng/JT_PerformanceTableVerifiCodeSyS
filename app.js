@@ -333,6 +333,37 @@ function validate(found) {
         prev = x.v; prevR = x.rad;
       });
     });
+    // 首行（最小幅度）检查：同幅度下臂长越长载荷应越小；首行值与次行值比值异常（只查原表）
+    if (c1.rows.length >= 2) {
+      const r0 = c1.rows[0].radius, r1 = c1.rows[1].radius;
+      const groups = [
+        { name: 'Full', idxs: f.groupIdxs[0] || [] },
+        { name: 'Half', idxs: ((f.groupIdxs[0] && f.groupIdxs[0][0] !== undefined) ? [f.groupIdxs[0][0]] : []).concat(f.groupIdxs[1] || []) },
+      ];
+      groups.forEach(g => {
+        let prev = null, prevB = null;
+        g.idxs.forEach(ci => {
+          const v = c1.rows[0].vals[ci];
+          const boom = cleanBoom(c1.booms[ci]);
+          if (typeof v !== 'number' || v === 0) return;
+          if (prev !== null && v > prev) {
+            const cell = colLetter(f.ampCol + 1 + ci) + (c1.boomRow + 2);
+            if (v >= 2 * prev) add('err', f.sheet, f.prg, cell, tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + '，比更短臂长 ' + prevB + 'm 的 ' + prev + ' 高出 ' + (v / prev).toFixed(1) + ' 倍，臂长越长载荷应越小，疑似多打了 0，请核对纸质表');
+            else add('warn', f.sheet, f.prg, cell, tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + ' 略高于更短臂长 ' + prevB + 'm 的 ' + prev + '，请核对纸质表');
+          }
+          prev = v; prevB = boom;
+        });
+      });
+      colIdxs.forEach(ci => {
+        const v0 = c1.rows[0].vals[ci], v1 = c1.rows[1].vals[ci];
+        if (typeof v0 !== 'number' || v0 === 0 || typeof v1 !== 'number' || v1 <= 0 || v0 <= 2 * v1) return;
+        const boom = cleanBoom(c1.booms[ci]);
+        const cell = colLetter(f.ampCol + 1 + ci) + (c1.boomRow + 2);
+        const dupI = list.findIndex(x => x.sheet === f.sheet && x.prg === f.prg && x.cell === cell && x.text.indexOf('同幅度 ') >= 0);
+        if (dupI >= 0) list.splice(dupI, 1); // 比值已报的格，不再重复报跨臂长问题
+        add('err', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + fmtR(r0) + 'm = ' + v0 + '，是下一行 ' + fmtR(r1) + 'm（' + v1 + '）的 ' + (v0 / v1).toFixed(1) + ' 倍，疑似多打了 0，请核对纸质表');
+      });
+    }
     // 右表与原表比对（记录前 3 处明细；只比进程序的两组）
     let diffN = 0; const diffEx = [];
     f.c2.rows.forEach(r2 => {
@@ -432,6 +463,36 @@ function columnIssues(grp, boom) {
   });
   return out;
 }
+/* 首行（最小幅度）检查（与 validate() 同一套规则；只对原表重算） */
+function firstRowIssues(grp) {
+  const out = [];
+  const tag = state.sheet + ' · ' + state.prg + '（R' + block().titleRow + '）';
+  const scope = sheetScope();
+  if (scope.length < 2) return out;
+  const r0 = scope[0], r1 = scope[1];
+  const b = block()[state.src][grp];
+  const booms = grp === 'Half' ? [halfZero()].concat(b.booms.map(String)) : b.booms.map(String);
+  const ratioHit = {};
+  booms.forEach(bm => {
+    if (grp === 'Half' && bm === halfZero()) return; // 13m 列是全伸组的，已在 Full 里查过，不重复报
+    const v0 = cellVal(grp, bm, r0), v1 = cellVal(grp, bm, r1);
+    if (typeof v0 === 'number' && v0 !== 0 && typeof v1 === 'number' && v1 > 0 && v0 > 2 * v1) ratioHit[bm] = { v0, v1 };
+  });
+  let prev = null, prevB = null;
+  booms.forEach(bm => {
+    const v = cellVal(grp, bm, r0);
+    const boom = cleanBoom(parseFloat(bm));
+    if (typeof v !== 'number' || v === 0) return;
+    if (ratioHit[bm]) {
+      out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell: excelCellFor(grp, bm, r0), text: tag + ' 臂长 ' + boom + 'm、幅度 ' + fmtR(r0) + 'm = ' + ratioHit[bm].v0 + '，是下一行 ' + fmtR(r1) + 'm（' + ratioHit[bm].v1 + '）的 ' + (ratioHit[bm].v0 / ratioHit[bm].v1).toFixed(1) + ' 倍，疑似多打了 0，请核对纸质表' });
+    } else if (prev !== null && v > prev) {
+      if (v >= 2 * prev) out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell: excelCellFor(grp, bm, r0), text: tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + '，比更短臂长 ' + prevB + 'm 的 ' + prev + ' 高出 ' + (v / prev).toFixed(1) + ' 倍，臂长越长载荷应越小，疑似多打了 0，请核对纸质表' });
+      else out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell: excelCellFor(grp, bm, r0), text: tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + ' 略高于更短臂长 ' + prevB + 'm 的 ' + prev + '，请核对纸质表' });
+    }
+    prev = v; prevB = boom;
+  });
+  return out;
+}
 function applyEdit(grp, boom, rad, newVal) {
   const oldVal = cellVal(grp, boom, rad);
   if (oldVal === newVal) return;
@@ -440,11 +501,12 @@ function applyEdit(grp, boom, rad, newVal) {
   state.edits[key] = { grp, boom: String(boom), rad, old: oldVal, new: newVal };
   if (state.src === 'orig') {
     const needle = '臂长 ' + cleanBoom(parseFloat(boom)) + 'm、幅度 ';
-    issues = issues.filter(i => !(i.sheet === state.sheet && i.prg === state.prg && i.text.indexOf(needle) >= 0));
+    issues = issues.filter(i => !(i.sheet === state.sheet && i.prg === state.prg && (i.text.indexOf(needle) >= 0 || i.text.indexOf('同幅度 ') >= 0 || i.text.indexOf('是下一行 ') >= 0)));
     ['Full', 'Half'].forEach(g => {
       const bl = block()[state.src][g].booms.map(String);
       if (bl.includes(String(boom)) || (g === 'Half' && String(boom) === halfZero())) issues = issues.concat(columnIssues(g, boom));
     });
+    ['Full', 'Half'].forEach(g => { issues = issues.concat(firstRowIssues(g)); });
   }
   renderValidation(); renderOut(); renderEdits(); drawErrorImage();
   computeCircleTables(); renderCircleJump();
@@ -640,6 +702,25 @@ function cellIssueLevel(grp, boom, rad) {
     for (let i = 0; i < idx; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) hasBefore = true; }
     for (let i = idx + 1; i < vals.length; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) hasAfter = true; }
     if (hasBefore && hasAfter) return 'err';
+  }
+  // 首行检查（与 validate() 同规则）：最小幅度行
+  const scope0 = sheetScope();
+  if (scope0.length >= 2 && rad === scope0[0] && typeof v === 'number' && v !== 0) {
+    const r1 = scope0[1];
+    const v1 = cellVal(grp, boom, r1);
+    if (typeof v1 === 'number' && v1 > 0 && v > 2 * v1) return 'err';
+    const b = block()[state.src][grp];
+    const booms = grp === 'Half' ? [halfZero()].concat(b.booms.map(String)) : b.booms.map(String);
+    const idxB = booms.indexOf(String(boom));
+    if (idxB > 0) {
+      for (let j = idxB - 1; j >= 0; j--) {
+        const pv = cellVal(grp, booms[j], rad);
+        if (typeof pv === 'number' && pv !== 0) {
+          if (v > pv) return v >= 2 * pv ? 'err' : 'warn';
+          break;
+        }
+      }
+    }
   }
   return null;
 }
