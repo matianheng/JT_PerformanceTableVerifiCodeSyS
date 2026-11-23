@@ -835,7 +835,7 @@ function useUploaded(wb, fileName, fileSize) {
   }
 }
 function handleFile(file) {
-  if (typeof XLSX === 'undefined') { $('fileInfo').innerHTML = '<b>解析库未加载：</b>当前离线或 CDN 不可达，无法解析上传的 Excel。请联网后刷新页面再上传。'; return; }
+  if (typeof XLSX === 'undefined') { $('fileInfo').innerHTML = '<b>解析库未加载：</b>本地 xlsx.full.min.js 缺失或未加载成功，请确认它与本页面在同一目录下，再刷新页面。'; return; }
   const rd = new FileReader();
   rd.onload = e => { try { useUploaded(XLSX.read(e.target.result, { type: 'array' }), file.name, file.size); } catch (err) { $('fileInfo').innerHTML = '<b>读取失败：</b>' + esc(err.message); } };
   rd.readAsArrayBuffer(file);
