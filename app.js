@@ -586,7 +586,31 @@ function computeCircleTables() {
     });
   });
   state.sheet = saved.sheet; state.prg = saved.prg; state.grp = saved.grp;
+  out.sort((a, b) => (b.err - a.err) || (b.warn - a.warn));  // 错得多的排前面
   state.circleTables = out;
+}
+/* 当前表没圈就跳到第一张错表（打开工具 / 重新上传时用；当前表本身有圈就不动） */
+function jumpToFirstErrorTable() {
+  const list = state.circleTables || [];
+  if (!list.length) return;
+  const cur = list.findIndex(t => t.sheet === state.sheet && t.prg === state.prg && t.grp === state.grp);
+  if (cur >= 0) return;
+  const t = list[0];
+  state.sheet = t.sheet; state.prg = t.prg; state.grp = t.grp; state.boom = null;
+}
+/* 只在错表之间翻：dir=1 下一张，dir=-1 上一张，到头绕回 */
+function stepErrorTable(dir) {
+  const list = state.circleTables || [];
+  if (!list.length) return;
+  let i = list.findIndex(t => t.sheet === state.sheet && t.prg === state.prg && t.grp === state.grp);
+  if (i < 0) i = dir > 0 ? -1 : 0;
+  i = (i + dir + list.length) % list.length;
+  const t = list[i];
+  state.sheet = t.sheet; state.prg = t.prg; state.grp = t.grp; state.boom = null;
+  document.querySelectorAll('#grpBtns button').forEach(b => b.classList.toggle('on', b.dataset.grp === t.grp));
+  renderAll();
+  const cv = $('errCanvas');
+  if (cv && cv.scrollIntoView) cv.scrollIntoView({ block: 'nearest' });
 }
 function renderCircleJump() {
   const el = $('circleJump'); if (!el) return;
@@ -645,6 +669,12 @@ function drawErrorImage() {
   if (cap) cap.textContent = (nErr || nWarn)
     ? '本表共 ' + (nErr + nWarn) + ' 处圈：🔴 确认错误 ' + nErr + ' 个，🟡 待确认 ' + nWarn + ' 个。'
     : '本表没有错误格 ✅（干净，0 圈是正常的；有圈的表见下面跳转）';
+  const nav = $('errNavLabel');
+  if (nav) {
+    const list = state.circleTables || [];
+    const i = list.findIndex(t => t.sheet === state.sheet && t.prg === state.prg && t.grp === state.grp);
+    nav.textContent = list.length ? (i >= 0 ? '第 ' + (i + 1) + ' / ' + list.length + ' 张错表' : '当前表没错（共 ' + list.length + ' 张错表）') : '全部表都干净';
+  }
 }
 function renderValidation() {
   const errs = issues.filter(i => i.level === 'err').length;
@@ -690,6 +720,7 @@ function useUploaded(wb, fileName, fileSize) {
     $('fileInfo').innerHTML = '已载入 <b>' + esc(fileName) + '</b>（' + new Date().toLocaleString() + (fileSize ? '，' + Math.round(fileSize / 1024) + ' KB' : '') + '）：解析出 ' + Object.keys(data.sheets).length + ' 张表、' + nPrg + ' 个工况块。PRG 与块的对应按标题自动识别（跨距 8.4m=全伸、5.5m=半伸）。已记下这次上传，下次打开页面自动恢复，不用重新传。' + delta;
     saveUpload(fileName);
     computeCircleTables(); renderCircleJump();
+    jumpToFirstErrorTable();
     if (!data.sheets[state.sheet]) state.sheet = Object.keys(data.sheets)[0];
     if (!data.sheets[state.sheet][state.prg]) state.prg = Object.keys(data.sheets[state.sheet])[0];
     state.boom = null;
@@ -784,6 +815,8 @@ $('circleJump').addEventListener('click', e => {
   const cv = $('errCanvas');
   if (cv && cv.scrollIntoView) cv.scrollIntoView({ block: 'nearest' });
 });
+$('prevErr').onclick = () => stepErrorTable(-1);
+$('nextErr').onclick = () => stepErrorTable(1);
 $('resetData').onclick = () => {
   try { localStorage.removeItem(LS_KEY); } catch (e) {}
   location.reload();
@@ -811,6 +844,7 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) h
         issuesOrig = JSON.parse(JSON.stringify(issues));
         $('fileInfo').innerHTML = '已恢复上次上传的 <b>' + esc(obj.name) + '</b>（' + new Date(obj.time).toLocaleString() + '）。改完 Excel 重新上传即可替换；点“恢复内置数据”可切回 2026-11-23 内置数据。';
         computeCircleTables(); renderCircleJump();
+        jumpToFirstErrorTable();
         renderValidation(); renderAll();
         return;
       }
@@ -821,5 +855,6 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) h
   issuesOrig = JSON.parse(JSON.stringify(issues));
   dataOrig = JSON.parse(JSON.stringify(state.data));
   computeCircleTables(); renderCircleJump();
+  jumpToFirstErrorTable();
   renderValidation(); renderAll();
 })();
