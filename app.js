@@ -31,7 +31,12 @@ function expandCompact(parts) {
           SCOPE.forEach((rad, j) => { vals[Number(rad).toFixed(1)] = gd.rows[i][j]; });
           rows[String(b)] = vals;
         });
-        groups[g] = { booms: gd.booms, rows };
+        const extra = {};
+        if (gd.extra) Object.keys(gd.extra).forEach(rad => {
+          extra[rad] = {};
+          gd.booms.forEach((b, i) => { extra[rad][String(b)] = gd.extra[rad][i]; });
+        });
+        groups[g] = { booms: gd.booms, rows, extra };
       });
       data.sheets[sheet][prg][src] = groups;
     });
@@ -100,7 +105,17 @@ function toGroups(copy) {
       });
       rows[String(blist[k])] = vals;
     });
-    groups[g] = { booms: blist, rows };
+    const extra = {};
+    copy.rows.forEach(rr => {
+      if (typeof rr.radius === 'number' && !SCOPE.includes(rr.radius)) {
+        extra[rk(rr.radius)] = {};
+        copy.booms.slice(a, b).forEach((bRaw, k) => {
+          const v = rr.vals[a + k];
+          extra[rk(rr.radius)][String(blist[k])] = (v === null || v === undefined) ? 0 : v;
+        });
+      }
+    });
+    groups[g] = { booms: blist, rows, extra };
   });
   return groups;
 }
@@ -202,7 +217,7 @@ function validate(found) {
     // 序号行
     if (c1.extra) add('warn', f.sheet, f.prg, '序号行', tag + ' 多出一行 0,1,2…序号行，全表仅个别块有，格式不一致');
     // 2.5m 行
-    if (c1.rows.some(r => r.radius === 2.5)) add('info', f.sheet, f.prg, '', tag + ' 有 2.5m 幅度行，程序幅度点从 3.0 起，该行无处可填');
+    if (c1.rows.some(r => r.radius === 2.5)) add('info', f.sheet, f.prg, '', tag + ' 有 2.5m 幅度行，ST 按程序幅度点生成（含 2.5m 列，仅 FC38HY）');
     // 逐列检查
     for (let ci = 0; ci < 21; ci++) {
       const boom = cleanBoom(c1.booms[ci]);
@@ -283,6 +298,26 @@ function boomIndex(boom) {
   return grpData().booms.map(String).indexOf(String(boom));
 }
 function arrName() { return state.grp === 'Full' ? 'Full_Weight' : state.grp === 'Half' ? 'Half_Weight' : 'Third_Weight'; }
+/* 程序里各 PRG 的幅度点（与 .export / PLCopenXML 导出一致）：五臂 3.0~44.0（31 点），六臂 3.0~52.0（35 点），FC38HY 首块多一个 2.5m 点 */
+function prgScope() {
+  const base = state.sheet === '五臂模式' ? SCOPE.slice(0, 31) : SCOPE.slice();
+  return state.prg === 'FC38HY' ? [2.5].concat(base) : base;
+}
+function cellVal(grp, boom, rad) {
+  const g = block()[state.src][grp];
+  if (rad === 2.5) {
+    let ex = (g.extra && g.extra['2.5']) || {};
+    let v = ex[String(boom)];
+    if (grp === 'Half' && String(boom) === '13') {
+      const exF = (block()[state.src]['Full'].extra && block()[state.src]['Full'].extra['2.5']) || {};
+      v = exF['13'];
+    }
+    return (v === null || v === undefined) ? 0 : v;
+  }
+  const row = (grp === 'Half' && String(boom) === '13') ? block()[state.src]['Full']['rows']['13'] : g.rows[String(boom)];
+  const v = row ? row[rk(rad)] : 0;
+  return (v === null || v === undefined) ? 0 : v;
+}
 function stLinesFor(grp, boom) {
   const saved = state.grp; state.grp = grp;
   const idx = boomIndex(boom);
@@ -290,8 +325,8 @@ function stLinesFor(grp, boom) {
   const row = boomRow(boom);
   state.grp = saved;
   const lines = ['\t(*' + fmtB(parseFloat(boom)) + 'm*)'];
-  SCOPE.forEach((rad, j) => {
-    const v = row[rk(rad)];
+  prgScope().forEach((rad, j) => {
+    const v = cellVal(grp, boom, rad);
     if (typeof v === 'string') { lines.push('\t' + arr + '[' + idx + ',' + j + ']:= 0 ;\t(* 原表此处为 ' + JSON.stringify(v) + '，待核对，暂填0 *)'); return; }
     lines.push('\t' + arr + '[' + idx + ',' + j + ']:= ' + v + ' ;');
   });
@@ -306,15 +341,15 @@ function fullPRGText() {
   fullBooms.forEach((bm, i) => { t += '\tArm_Length_Weight_Point[' + i + ']:= ' + fmtB(bm) + ';\n'; });
   t += '(*快伸工况*)\nELSE\n\tArm_Length_Weight_Point[0]:= 13.0;\n';
   halfBooms.forEach((bm, i) => { t += '\tArm_Length_Weight_Point[' + (i + 1) + ']:= ' + fmtB(bm) + ';\n'; });
-  t += 'END_IF;\n\n(*幅度点*)\n';
-  SCOPE.forEach((rad, i) => { t += '\tScope_Weight_Point[' + i + ']:= ' + rad.toFixed(2) + ';\n'; });
+  t += 'END_IF;\n\n(*幅度点*' + (state.prg === 'FC38HY' ? '（含 2.5m）' : '') + '*)\n';
+  prgScope().forEach((rad, i) => { t += '\tScope_Weight_Point[' + i + ']:= ' + rad.toFixed(2) + ';\n'; });
   t += '\n(*支腿' + (state.prg[0] === 'F' ? '全伸' : '半伸') + '工况*)\n';
   fullBooms.forEach(bm => { t += stLinesFor('Full', String(bm)) + '\n\n'; });
-  SCOPE.forEach((rad, j) => { t += '\tFull_Weight[9,' + j + ']:= 0 ;\n'; });
+  prgScope().forEach((rad, j) => { t += '\tFull_Weight[9,' + j + ']:= 0 ;\n'; });
   t += '\n(*快伸工况性能表*)\n';
   ['13'].concat(halfBooms.map(String)).forEach(bm => { t += stLinesFor('Half', bm) + '\n\n'; });
   const halfCount = halfBooms.length + 1;
-  for (let r = halfCount; r <= 9; r++) { SCOPE.forEach((rad, j) => { t += '\tHalf_Weight[' + r + ',' + j + ']:= 0 ;\n'; }); t += '\n'; }
+  for (let r = halfCount; r <= 9; r++) { prgScope().forEach((rad, j) => { t += '\tHalf_Weight[' + r + ',' + j + ']:= 0 ;\n'; }); t += '\n'; }
   t += '(*第三组性能表（数组名 Third_Weight 为占位，请按实际改）*)\n';
   thirdBooms.forEach(bm => { t += stLinesFor('Third', String(bm)) + '\n\n'; });
   t += 'RETURN;\n';
