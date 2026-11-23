@@ -376,6 +376,7 @@ function applyEdit(grp, boom, rad, newVal) {
     });
   }
   renderValidation(); renderOut(); renderEdits(); drawErrorImage();
+  computeCircleTables(); renderCircleJump();
 }
 function undoEdits() {
   if (!dataOrig) return;
@@ -383,6 +384,7 @@ function undoEdits() {
   state.edits = {};
   issues = issuesOrig ? JSON.parse(JSON.stringify(issuesOrig)) : [];
   renderValidation(); renderAll(); renderEdits(); drawErrorImage();
+  computeCircleTables(); renderCircleJump();
 }
 function renderEdits() {
   const el = $('editPanel'); if (!el) return;
@@ -563,6 +565,37 @@ function cellIssueLevel(grp, boom, rad) {
   }
   return null;
 }
+/* 扫一遍全部 36 个表×3 组，记下哪些表有圈（供跳转栏用；只在数据变化时算一次） */
+function computeCircleTables() {
+  const saved = { sheet: state.sheet, prg: state.prg, grp: state.grp };
+  const out = [];
+  Object.keys(state.data.sheets).forEach(sh => {
+    Object.keys(state.data.sheets[sh]).forEach(prg => {
+      ['Full', 'Half', 'Third'].forEach(g => {
+        state.sheet = sh; state.prg = prg; state.grp = g;
+        const b = block()[state.src][g];
+        const booms = g === 'Half' ? ['13'].concat(b.booms.map(String)) : b.booms.map(String);
+        let err = 0, warn = 0;
+        booms.forEach(bm => prgScope().forEach(rad => {
+          const lv = cellIssueLevel(g, bm, rad);
+          if (lv === 'err') err++;
+          else if (lv === 'warn') warn++;
+        }));
+        if (err || warn) out.push({ sheet: sh, prg, grp: g, err, warn });
+      });
+    });
+  });
+  state.sheet = saved.sheet; state.prg = saved.prg; state.grp = saved.grp;
+  state.circleTables = out;
+}
+function renderCircleJump() {
+  const el = $('circleJump'); if (!el) return;
+  const list = state.circleTables || [];
+  if (!list.length) { el.innerHTML = '<span class="sub">全部 36 个表都没有错误格。</span>'; return; }
+  const gName = g => g === 'Full' ? '全伸组' : g === 'Half' ? '快伸组' : '第三组';
+  el.innerHTML = '<span class="sub">有圈的表（点一下跳过去看圈）：</span>' + list.map((t, i) =>
+    '<button data-i="' + i + '">' + t.sheet.replace('模式', '') + ' ' + t.prg + ' ' + gName(t.grp) + ' 🔴' + t.err + ' 🟡' + t.warn + '</button>').join('');
+}
 function drawErrorImage() {
   const cv = $('errCanvas'); if (!cv) return;
   const ctx = cv.getContext && cv.getContext('2d'); if (!ctx) return;
@@ -570,6 +603,7 @@ function drawErrorImage() {
   const g = b[state.src][state.grp];
   const booms = state.grp === 'Half' ? ['13'].concat(g.booms.map(String)) : g.booms.map(String);
   const radii = prgScope();
+  let nErr = 0, nWarn = 0;
   const radW = 62, colW = 96, rowH = 26, headH = 30, titleH = 48, legH = 32;
   const W = radW + booms.length * colW, H = titleH + headH + radii.length * rowH + legH;
   cv.width = W; cv.height = H;
@@ -590,6 +624,8 @@ function drawErrorImage() {
       const v = cellVal(state.grp, bm, rad);
       const cx = radW + i * colW + colW / 2, cy = y + rowH / 2;
       const lvl = cellIssueLevel(state.grp, bm, rad);
+      if (lvl === 'err') nErr++;
+      else if (lvl === 'warn') nWarn++;
       const ek = [state.sheet, state.prg, state.src, state.grp, String(bm), String(rad)].join('|');
       ctx.fillStyle = typeof v === 'string' ? '#c00' : v === 0 ? '#bbb' : '#222';
       ctx.fillText(typeof v === 'string' ? v : v, cx, cy);
@@ -605,6 +641,10 @@ function drawErrorImage() {
   const ly = H - legH / 2;
   ctx.textAlign = 'left'; ctx.font = '12px sans-serif'; ctx.fillStyle = '#333';
   ctx.fillText('🔴 红圈=确认错误　🟡 黄圈=待确认　🔵 蓝点=在线改过的值', 10, ly);
+  const cap = $('imgCount');
+  if (cap) cap.textContent = (nErr || nWarn)
+    ? '本表共 ' + (nErr + nWarn) + ' 处圈：🔴 确认错误 ' + nErr + ' 个，🟡 待确认 ' + nWarn + ' 个。'
+    : '本表没有错误格 ✅（干净，0 圈是正常的；有圈的表见下面跳转）';
 }
 function renderValidation() {
   const errs = issues.filter(i => i.level === 'err').length;
@@ -649,6 +689,7 @@ function useUploaded(wb, fileName, fileSize) {
     if (prevIssues.length && (state.fileMeta || prevIssues.length)) delta = '<br>与上次比：确认错误 ' + prevErrs + ' → ' + errs + ' 处' + (fixed ? '，已修复 ' + fixed + ' 处' : '') + '。';
     $('fileInfo').innerHTML = '已载入 <b>' + esc(fileName) + '</b>（' + new Date().toLocaleString() + (fileSize ? '，' + Math.round(fileSize / 1024) + ' KB' : '') + '）：解析出 ' + Object.keys(data.sheets).length + ' 张表、' + nPrg + ' 个工况块。PRG 与块的对应按标题自动识别（跨距 8.4m=全伸、5.5m=半伸）。已记下这次上传，下次打开页面自动恢复，不用重新传。' + delta;
     saveUpload(fileName);
+    computeCircleTables(); renderCircleJump();
     if (!data.sheets[state.sheet]) state.sheet = Object.keys(data.sheets)[0];
     if (!data.sheets[state.sheet][state.prg]) state.prg = Object.keys(data.sheets[state.sheet])[0];
     state.boom = null;
@@ -732,6 +773,17 @@ $('dlImg').onclick = () => {
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   });
 };
+$('circleJump').addEventListener('click', e => {
+  const btn = e.target.closest ? e.target.closest('button') : e.target;
+  if (!btn || btn.dataset.i === undefined) return;
+  const t = (state.circleTables || [])[parseInt(btn.dataset.i, 10)];
+  if (!t) return;
+  state.sheet = t.sheet; state.prg = t.prg; state.grp = t.grp; state.boom = null;
+  document.querySelectorAll('#grpBtns button').forEach(b => b.classList.toggle('on', b.dataset.grp === t.grp));
+  renderAll();
+  const cv = $('errCanvas');
+  if (cv && cv.scrollIntoView) cv.scrollIntoView({ block: 'nearest' });
+});
 $('resetData').onclick = () => {
   try { localStorage.removeItem(LS_KEY); } catch (e) {}
   location.reload();
@@ -758,6 +810,7 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) h
         issues = obj.issues || [];
         issuesOrig = JSON.parse(JSON.stringify(issues));
         $('fileInfo').innerHTML = '已恢复上次上传的 <b>' + esc(obj.name) + '</b>（' + new Date(obj.time).toLocaleString() + '）。改完 Excel 重新上传即可替换；点“恢复内置数据”可切回 2026-11-23 内置数据。';
+        computeCircleTables(); renderCircleJump();
         renderValidation(); renderAll();
         return;
       }
@@ -767,5 +820,6 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) h
   issues = (typeof BUILTIN_ISSUES !== 'undefined' ? BUILTIN_ISSUES : []);
   issuesOrig = JSON.parse(JSON.stringify(issues));
   dataOrig = JSON.parse(JSON.stringify(state.data));
+  computeCircleTables(); renderCircleJump();
   renderValidation(); renderAll();
 })();

@@ -65,8 +65,10 @@
   <div class="sec"><div class="info" id="validSummary">正在对内置数据做校验…</div><div id="validList"></div></div>
   <div class="sec"><div class="lab">错误圈图（当前选中的表：第 3 节选的 PRG 与组别）</div>
     <div class="sub">红圈=确认错误，黄圈=待确认，蓝点=在线改过的值。改完 Excel 重新上传，或直接在第 3 节的表里改，圈图跟着变。</div>
+    <div class="sub" id="imgCount"></div>
     <canvas id="errCanvas"></canvas>
     <div class="rowbtns"><button id="dlImg">⬇ 下载圈图 (PNG)</button></div>
+    <div class="btns" id="circleJump" style="margin-top:6px"></div>
   </div>
 
   <h2>3. 生成 ST 代码</h2>
