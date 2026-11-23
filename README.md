@@ -1,0 +1,2 @@
+# JT_PerformanceTableVerifiCodeSyS
+JTC100G6-性能表20260125-完整版-力限填充 根据性能表修改codesys
