@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JTC100G6 性能表动态校验 + ST 代码生成</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; padding: 16px; background: #f4f4f4; color: #222; }
+  .wrap { max-width: 980px; margin: 0 auto; background: #fff; padding: 20px 22px; border-radius: 10px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 22px 0 8px; border-top: 1px solid #eee; padding-top: 16px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 16px; line-height: 1.7; }
+  .sec { margin: 14px 0; }
+  .sec .lab { font-weight: bold; font-size: 14px; margin-bottom: 6px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  button { font-family: inherit; font-size: 13px; padding: 7px 12px; border: 1px solid #bbb; background: #fff; border-radius: 6px; cursor: pointer; }
+  button:hover { border-color: #333; }
+  button.on { background: #1677ff; color: #fff; border-color: #1677ff; }
+  button.copy { background: #1677ff; color: #fff; border-color: #1677ff; font-size: 14px; padding: 9px 18px; }
+  button.copy.done { background: #52c41a; border-color: #52c41a; }
+  button:disabled { opacity: .45; cursor: default; }
+  .info { background: #eef6ff; border: 1px solid #bcd8f5; border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.7; }
+  .warn { background: #fff7e6; border: 1px solid #f5cf87; border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.7; margin-top: 10px; }
+  .warn b { color: #b45309; }
+  .err { background: #fdecea; border: 1px solid #f5b5b0; border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.7; margin-top: 10px; }
+  .drop { border: 2px dashed #bbb; border-radius: 8px; padding: 22px; text-align: center; color: #666; font-size: 14px; cursor: pointer; }
+  .drop.over { border-color: #1677ff; background: #eef6ff; color: #1677ff; }
+  .drop input { display: none; }
+  pre { background: #1e1e1e; color: #d4d4d4; padding: 14px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.55; white-space: pre; margin: 8px 0; }
+  table { border-collapse: collapse; font-size: 13px; margin-top: 8px; width: 100%; }
+  th, td { border: 1px solid #ddd; padding: 4px 10px; text-align: left; }
+  td.num, th.num { text-align: right; }
+  th { background: #fafafa; }
+  td.zero { color: #bbb; }
+  td.bad { background: #fde2e2; color: #c00; font-weight: bold; }
+  td.warncell { background: #fff3cd; }
+  tr.lvl-err td:first-child { border-left: 4px solid #d00; }
+  tr.lvl-warn td:first-child { border-left: 4px solid #d9a400; }
+  .rowbtns { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  .inputs { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin: 8px 0; }
+  .inputs label { font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+  .inputs input, .inputs select { font-family: inherit; font-size: 14px; padding: 7px 9px; border: 1px solid #bbb; border-radius: 6px; width: 130px; }
+  .big { font-size: 22px; font-weight: bold; }
+  .foot { color: #888; font-size: 12px; line-height: 1.7; margin-top: 18px; border-top: 1px solid #eee; padding-top: 10px; }
+  .tabs button.on { background: #222; border-color: #222; }
+  .badge { display: inline-block; background: #e6f7ff; border: 1px solid #91d5ff; color: #0958d9; border-radius: 4px; padding: 1px 8px; font-size: 12px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>JTC100G6 性能表动态校验 + ST 代码生成</h1>
+  <div class="sub">上传性能表 Excel，页面就地解析、校验、生成 CoDeSys ST 代码。不再写死数据，Excel 改了，工具跟着改。默认已载入 2026-11-23 版内置数据，可直接用；上传新文件后自动替换。<span class="badge" id="dataBadge">内置数据</span></div>
+
+  <h2 style="border-top:none;padding-top:0">1. 上传性能表 Excel</h2>
+  <div class="drop" id="drop">把 .xlsx 文件拖到这里，或点击选择文件<input type="file" id="fileInput" accept=".xlsx,.xls"></div>
+  <div class="sec"><div class="info" id="fileInfo">当前数据：内置（JTC100G6-性能表20260125-完整版-力限填充.xlsx，2026-11-23）。上传后此处显示文件名与解析结果。</div></div>
+
+  <h2>2. 校验结果</h2>
+  <div class="sec"><div class="info" id="validSummary">正在对内置数据做校验…</div><div id="validList"></div></div>
+
+  <h2>3. 生成 ST 代码</h2>
+  <div class="sec"><div class="lab">臂数</div>
+    <div class="btns" id="sheetBtns"></div>
+  </div>
+  <div class="sec"><div class="lab">工况 PRG（F=全伸腿，H=半伸腿；HY=后移800mm，无HY=后移0mm；数字=配重 00/14/21/27/38）</div>
+    <div class="btns" id="prgBtns"></div>
+  </div>
+  <div class="sec"><div class="lab">数据源</div>
+    <div class="btns" id="srcBtns">
+      <button data-src="orig" class="on">原表（每块最左边的完整表）</button>
+      <button data-src="filled">力限填充版（原表 ×1.33，臂长网格可能不同）</button>
+    </div>
+  </div>
+  <div class="sec"><div class="info" id="blockInfo"></div><div class="warn" id="blockWarn" style="display:none"></div></div>
+  <div class="sec"><div class="lab">组别</div>
+    <div class="btns tabs" id="grpBtns">
+      <button data-grp="Full" class="on">全伸组 Full_Weight</button>
+      <button data-grp="Half">快伸组 Half_Weight</button>
+      <button data-grp="Third">第三组 Third_Weight（待确认）</button>
+    </div>
+  </div>
+  <div class="sec"><div class="lab">臂长（点击后下方出代码）</div>
+    <div class="btns" id="boomBtns"></div>
+  </div>
+  <div class="sec">
+    <div class="rowbtns">
+      <button class="copy" id="copyOne">📋 复制本臂长代码</button>
+      <button class="copy" id="copyAll" style="background:#222;border-color:#222">📋 复制本 PRG 全部（含臂长点/幅度点/Full/Half）</button>
+    </div>
+    <pre id="out">请先选臂长。</pre>
+    <div id="warnOut"></div>
+    <table id="checkTable"></table>
+  </div>
+
+  <h2>4. 动态查表（插值算额定载荷）</h2>
+  <div class="sub">模拟力限器运行时的查表：输入当前臂长和幅度，在表里双线性插值出额定载荷；再输实际吊重，算载荷率。臂长/幅度落在两个表点之间时插值，超出表范围按边界值并提示。</div>
+  <div class="sec">
+    <div class="inputs">
+      <label>组别
+        <select id="lkGrp"><option value="Full">全伸组</option><option value="Half">快伸组</option><option value="Third">第三组</option></select>
+      </label>
+      <label>臂长 (m)<input id="lkBoom" type="number" step="0.1" value="28.8"></label>
+      <label>幅度 (m)<input id="lkRad" type="number" step="0.1" value="10"></label>
+      <label>实际吊重 (kg，可空)<input id="lkLoad" type="number" step="100" placeholder="例如 15000"></label>
+      <button class="copy" id="lkGo" style="padding:9px 18px">算额定载荷</button>
+    </div>
+    <div id="lkOut"></div>
+  </div>
+
+  <div class="foot">
+    约定：① 幅度点固定用程序示例的 35 个 Scope 点（3.0～52.0），Excel 里没有的幅度填 0。② Full_Weight 行号 = 全伸组内序号（0~8，第 9 行全 0）；Half_Weight 第 0 行是 13.0m（与全伸组同值），第 1~6 行是快伸组臂长，其余行全 0。③ 第三组在示例代码里没有对应数组，暂用 Third_Weight 占位。④ PRG 与 Excel 块的对应按标题自动识别：跨距 8.4m=全伸（F）、5.5m=半伸（H）；配重取右表（14t/20.5t→21）；后移 800mm=HY。标题里“全伸/半伸”文字不可靠（六臂半伸表全写错），以跨距为准。⑤ 校验规则：同臂长随幅度增大不得上升；数值应为 100 的倍数；幅度不得重复/缺失；标题配重分量和应等于吨数；右表有值格须与原表一致；填充版系数按 1.33 核对。
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
