@@ -407,10 +407,11 @@ function validate(found) {
       });
     });
     if (diffN) add('err', f.sheet, f.prg, '', tag + ' 右表与原表重叠格有 ' + diffN + ' 处数值不同（' + diffEx.join('；') + '）');
-    // 右表臂长网格
+    // 右表臂长网格（只有右表真的有臂长时才比；单复本文件右表全是空，不报）
     const g1 = c1.booms.slice(0, 3).map(cleanBoom).join('/');
     const g2 = f.c2.booms.slice(0, 3).map(cleanBoom).join('/');
-    if (g1 !== g2) add('warn', f.sheet, f.prg, '臂长行', tag + ' 右表臂长网格与左表不同：左 ' + g1 + '，右 ' + g2 + '（短约 0.1m）');
+    const hasC2 = f.c2.booms && f.c2.booms.some(b => b !== null && b !== undefined);
+    if (hasC2 && g1 !== g2) add('warn', f.sheet, f.prg, '臂长行', tag + ' 右表臂长网格与左表不同：左 ' + g1 + '，右 ' + g2 + '（短约 0.1m）');
     // 填充版系数与全文件主要比值不一致
     const bt = blockTop.get(f);
     if (bt && modeRatio !== null && Math.abs(bt.ratio - modeRatio) > 0.05) add('warn', f.sheet, f.prg, '', tag + ' 填充版/原表比值主要为 ' + bt.ratio + '（全文件主要为 ' + modeRatio + '），共 ' + bt.n + ' 格');
@@ -1066,20 +1067,47 @@ function parseProgram(text) {
 }
 /* 程序 POU 与 Excel 块的对应：精确匹配（配置前缀 + 工况键）优先；后备按工况键后缀匹配，
    臂长表最贴合的胜出（五臂/六臂同名工况靠臂长区分，正确匹配 9/9、错表约 4/9）。 */
+/* 在 {值:下标} 索引里找最接近的下标（容差 0.15）：Excel 臂长 12.9 与程序臂长 13.0 差 0.1m 时仍能对应上；幅度点间隔 0.5m，不会误配 */
+function nearestIdx(idx, v, tol) {
+  tol = (tol === undefined) ? 0.15 : tol;
+  if (idx[v] !== undefined) return idx[v];
+  let best = undefined, bestD = Infinity;
+  Object.keys(idx).forEach(k => {
+    const d = Math.abs(parseFloat(k) - v);
+    if (d < bestD) { bestD = d; best = idx[k]; }
+  });
+  return (bestD <= tol) ? best : undefined;
+}
+/* 程序里实际有的配重（从 POU 名里取 F/H 后面 C 的数字，如 JTC101FC21→21；不能直接搜 C\d+，会误取 JTC100 里的 100） */
+function progCounterweights(pous) {
+  const s = new Set();
+  Object.keys(pous).forEach(n => {
+    const m = n.slice('Working_Table_'.length).match(/[FH]C(\d+)/);
+    if (m) s.add(parseInt(m[1], 10));
+  });
+  return s;
+}
 function rebuildProgramMap() {
   if (!state.program || !state.data) return;
   const map = {};
   const missing = [];
   const pous = state.program.pous;
+  const cwSet = progCounterweights(pous);
   Object.keys(state.data.sheets).forEach(sh => {
     Object.keys(state.data.sheets[sh]).forEach(key => {
       const blk = state.data.sheets[sh][key];
       const disp = displayPrg(sh, blk);
       let found = pous['Working_Table_' + disp] ? 'Working_Table_' + disp : null;
       if (!found) {
+        // 兜底：单复本文件只有左表配重（20/13），程序用右表配重（21/14）——取程序里最接近的配重再试
+        let nearCw = null, nearD = Infinity;
+        cwSet.forEach(v => { const d = Math.abs(v - blk.meta.cw); if (d < nearD) { nearD = d; nearCw = v; } });
+        const nearKey = (nearCw !== null && nearCw !== Math.round(blk.meta.cw))
+          ? blk.meta.letter + 'C' + String(nearCw).padStart(2, '0') + (blk.meta.back > 0 ? 'HY' : '')
+          : null;
         const cands = Object.keys(pous).filter(n => {
           const rest = n.slice('Working_Table_'.length);
-          return rest === key || rest.endsWith(key);
+          return rest === key || rest.endsWith(key) || (nearKey && (rest === nearKey || rest.endsWith(nearKey)));
         });
         let best = null, bestScore = -1;
         const booms = blk.orig.Full.booms.map(b => cleanBoom(b));
@@ -1087,7 +1115,7 @@ function rebuildProgramMap() {
         cands.forEach(n => {
           const arms = Object.values(pous[n].fullArm || {});
           let score = 0;
-          booms.forEach(b => { if (arms.some(a => Math.abs(cleanBoom(a) - b) < 0.06)) score++; });
+          booms.forEach(b => { if (arms.some(a => Math.abs(cleanBoom(a) - b) <= 0.15)) score++; });
           if (score > bestScore) { bestScore = score; best = n; }
         });
         if (best && bestScore >= need) found = best;
@@ -1130,8 +1158,8 @@ function programValue(grp, boom, rad) {
   if (!state.program || !state.data || state.src !== 'orig') return null;
   const grid = programGridFor(state.sheet, state.prg, grp);
   if (!grid) return null;
-  const r = grid.armIdx[cleanBoom(parseFloat(boom))];
-  const c = grid.scopeIdx[cleanBoom(rad)];
+  const r = nearestIdx(grid.armIdx, cleanBoom(parseFloat(boom)));
+  const c = nearestIdx(grid.scopeIdx, cleanBoom(rad));
   if (r === undefined || c === undefined) return null;
   const v = grid.arr[r + ',' + c];
   return (typeof v === 'number') ? v : 0;
@@ -1155,10 +1183,10 @@ function programDiffIssues() {
         const booms = grp === 'Full' ? blk.orig.Full.booms.map(String) : [halfZero()].concat(blk.orig.Half.booms.map(String));
         const radii = prgScope();
         booms.forEach(bm => {
-          const r = grid.armIdx[cleanBoom(parseFloat(bm))];
+          const r = nearestIdx(grid.armIdx, cleanBoom(parseFloat(bm)));
           const bShow = cleanBoom(parseFloat(bm));
           radii.forEach(rad => {
-            const c = grid.scopeIdx[cleanBoom(rad)];
+            const c = nearestIdx(grid.scopeIdx, cleanBoom(rad));
             const ev = cellVal(grp, bm, rad);
             if (r === undefined || c === undefined) {
               if (typeof ev === 'number' && ev !== 0) noCounter[sh + '|' + key] = (noCounter[sh + '|' + key] || 0) + 1;
@@ -1204,7 +1232,7 @@ function mergeProgramDiffs(trend) {
     if (!m) return true;
     return !keys.has(i.sheet + '|' + i.prg + '|' + m[1] + '|' + m[2]);
   });
-  return kept.concat(diffs);
+  return diffs.concat(kept); // 差异优先级最高，放最前面；趋势作为提示，跟在后面
 }
 function saveProg() {
   try {
