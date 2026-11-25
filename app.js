@@ -590,6 +590,31 @@ function stLinesFor(grp, boom) {
   });
   return lines.join('\n');
 }
+/* 代码面板的 HTML 版：与程序不同的行红底标出并注明程序值（只影响显示；复制按钮仍用纯文本 stLinesFor，粘贴进 CoDeSys 是干净代码） */
+function stLinesHtml(grp, boom) {
+  const saved = state.grp; state.grp = grp;
+  const idx = boomIndex(boom);
+  const arr = arrName();
+  state.grp = saved;
+  const scope = prgScope();
+  const showDiff = state.program && state.src === 'orig';
+  let nDiff = 0;
+  const html = ['\t(*' + fmt1(parseFloat(boom)) + 'm*)'].concat(scope.map((rad, j) => {
+    const v = cellVal(grp, boom, rad);
+    let ln;
+    if (typeof v === 'string') ln = '\t' + arr + '[' + idx + ',' + j + ']:= 0 ;\t(* 原表此处为 ' + JSON.stringify(v) + '，待核对，暂填0 *)';
+    else ln = '\t' + arr + '[' + idx + ',' + j + ']:= ' + v + ' ;';
+    if (showDiff && typeof v === 'number') {
+      const pv = programValue(grp, boom, rad);
+      if (typeof pv === 'number' && pv !== v) {
+        nDiff++;
+        return '<span class="codeline-diff">' + esc(ln) + '  /* 程序 ' + pv + ' */</span>';
+      }
+    }
+    return esc(ln);
+  }));
+  return { html: html.join('\n'), nDiff };
+}
 function fullPRGText() {
   const b = block();
   const cfg = state.cfg;
@@ -709,7 +734,8 @@ function renderOut() {
   const out = $('out'), tbl = $('checkTable'), w = $('warnOut');
   if (!state.data) { out.textContent = '请先上传 Excel。'; tbl.innerHTML = ''; w.innerHTML = ''; return; }
   if (state.boom === null) { out.textContent = '请先选臂长。'; tbl.innerHTML = ''; w.innerHTML = ''; return; }
-  out.textContent = stLinesFor(state.grp, state.boom);
+  const shown = stLinesHtml(state.grp, state.boom);
+  out.innerHTML = shown.html;
   let html = '<tr><th>幅度(m)</th><th class="num">Excel 值（点格子可改）</th><th class="num">进程序</th><th>备注</th></tr>';
   prgScope().forEach(rad => {
     const v = cellVal(state.grp, state.boom, rad);
@@ -720,7 +746,7 @@ function renderOut() {
     html += '<tr><td>' + rad + '</td><td class="num ' + cls + (ed ? ' edited' : '') + '"><input class="celledit" type="text" inputmode="decimal" value="' + esc(typeof v === 'string' ? v : v) + '" data-grp="' + state.grp + '" data-boom="' + esc(String(state.boom)) + '" data-rad="' + rad + '"></td><td class="num">' + (typeof v === 'string' ? 0 : v) + '</td><td>' + (iss ? esc(iss.text.split('】').pop() || iss.text) : '') + (ed ? ' ✏️已改' : '') + '</td></tr>';
   });
   tbl.innerHTML = html;
-  w.innerHTML = '';
+  w.innerHTML = shown.nDiff ? '<span class="badge" style="background:#fde2e2;border-color:#f5a3a3;color:#c00">本臂长与程序有 ' + shown.nDiff + ' 处不同（红底行），复制后粘贴到 CoDeSys 即覆盖为 Excel 的值</span>' : '';
 }
 /* 分段复制：当前 PRG 每个臂长一段，各自带复制按钮 */
 function renderSegments() {
