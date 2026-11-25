@@ -293,7 +293,7 @@ function validate(found) {
     const titleStr = String(c1.title || '');
     if (f.spanRankSize >= 2) {
       const kw = titleStr.indexOf('半伸') >= 0 ? 'H' : titleStr.indexOf('全伸') >= 0 ? 'F' : null;
-      if (kw && kw !== f.letter) add('err', f.sheet, f.prg, colLetter(f.ampCol + 2) + f.titleRow, tag + ' 标题写“' + (kw === 'F' ? '全伸' : '半伸') + '”，但跨距 ' + f.span + 'm 是文件里' + (f.letter === 'H' ? '最小' : '最大') + '的，应为“' + (f.letter === 'F' ? '全伸' : '半伸') + '”');
+      if (kw && kw !== f.letter) add('warn', f.sheet, f.prg, colLetter(f.ampCol + 2) + f.titleRow, tag + ' 标题写“' + (kw === 'F' ? '全伸' : '半伸') + '”，但跨距 ' + f.span + 'm 是文件里' + (f.letter === 'H' ? '最小' : '最大') + '的，应为“' + (f.letter === 'F' ? '全伸' : '半伸') + '”');
     }
     // 左表标题配重偏离同系列惯例（PRG 按右表取）
     const lcw = (String(c1.title || '').match(/(\d+(?:\.\d+)?)吨配重/) || [])[1];
@@ -304,16 +304,16 @@ function validate(found) {
     const tonM = titleStr.match(/(\d+(?:\.\d+)?)吨配重/);
     if (cwM && tonM) {
       const sum = cwM[1].split('+').reduce((s, x) => s + (parseFloat(x) || 0), 0);
-      if (Math.abs(sum - parseFloat(tonM[1])) > 0.01) add('err', f.sheet, f.prg, '标题行', tag + ' 配重标题 ' + tonM[1] + 't ≠ 分量和 ' + sum + 't');
+      if (Math.abs(sum - parseFloat(tonM[1])) > 0.01) add('warn', f.sheet, f.prg, '标题行', tag + ' 配重标题 ' + tonM[1] + 't ≠ 分量和 ' + sum + 't');
     }
     // 幅度重复 / 缺失
     if (f.fix) add('warn', f.sheet, f.prg, 'B列', tag + ' 幅度 ' + fmtR(f.fix.dup) + 'm 出现两次、' + fmtR(f.fix.fixed) + 'm 缺失，已按趋势把第一行 ' + fmtR(f.fix.dup) + ' 当作 ' + fmtR(f.fix.fixed) + ' 处理');
     else {
       const radii = c1.rows.map(r => r.radius).filter(x => typeof x === 'number');
       const seen = {};
-      radii.forEach(x => { if (seen[x]) add('err', f.sheet, f.prg, 'B列', tag + ' 幅度 ' + x + 'm 重复'); seen[x] = true; });
+      radii.forEach(x => { if (seen[x]) add('warn', f.sheet, f.prg, 'B列', tag + ' 幅度 ' + x + 'm 重复'); seen[x] = true; });
       const missing = f.rawScope.filter(x => !seen[x]);
-      missing.forEach(x => add('err', f.sheet, f.prg, 'B列', tag + ' 幅度 ' + x + 'm 缺失（主序列里有，表里没有）'));
+      missing.forEach(x => add('warn', f.sheet, f.prg, 'B列', tag + ' 幅度 ' + x + 'm 缺失（主序列里有，表里没有）'));
     }
     // 序号行
     if (c1.extra) add('warn', f.sheet, f.prg, '序号行', tag + ' 多出一行 0,1,2…序号行，全表仅个别块有，格式不一致');
@@ -336,11 +336,11 @@ function validate(found) {
           let extra = '';
           const r2 = f.c2.rows.find(r => r.radius === x.rad);
           if (r2 && r2.vals[ci] !== null && r2.vals[ci] !== undefined) extra = '，右表同格为 ' + JSON.stringify(r2.vals[ci]);
-          add('err', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + x.rad + 'm 一格内有文本 ' + JSON.stringify(x.v) + '，不是数字' + extra + '，请核对纸质表');
+          add('warn', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + x.rad + 'm 一格内有文本 ' + JSON.stringify(x.v) + '，不是数字' + extra + '，请核对纸质表');
           return;
         }
         if (x.v === null || x.v === undefined) {
-          if (minI >= 0 && i > minI && i < maxI) add('err', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + x.rad + 'm 空白空洞');
+          if (minI >= 0 && i > minI && i < maxI) add('warn', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + x.rad + 'm 空白空洞');
           return;
         }
         if (x.v % 100 !== 0) add('warn', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + x.rad + 'm = ' + x.v + '，不是 100 的倍数（请核对纸质表）');
@@ -353,12 +353,12 @@ function validate(found) {
             const spike = typeof nextV === 'number' && nextV !== 0 && (x.v - prev) > 3 * scale && (x.v - nextV) > 3 * scale;
             if (typeof nextV === 'number' && nextV !== 0 && !spike) {
               prevIsDip = true;
-              if (dip > 1000) add('err', f.sheet, f.prg, prevCell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表');
+              if (dip > 1000) add('warn', f.sheet, f.prg, prevCell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表');
               else add('warn', f.sheet, f.prg, prevCell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表');
             }
           }
         }
-        if (prev !== null && x.v > prev && !prevIsDip) add('err', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律');
+        if (prev !== null && x.v > prev && !prevIsDip) add('warn', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律');
         prevPrev = prev; prev = x.v; prevR = x.rad; prevCell = cell; prevI = i;
       });
     });
@@ -377,7 +377,7 @@ function validate(found) {
           if (typeof v !== 'number' || v === 0) return;
           if (prev !== null && v > prev) {
             const cell = colLetter(f.ampCol + 1 + ci) + (c1.boomRow + 2);
-            if (v >= 2 * prev) add('err', f.sheet, f.prg, cell, tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + '，比更短臂长 ' + prevB + 'm 的 ' + prev + ' 高出 ' + (v / prev).toFixed(1) + ' 倍，臂长越长载荷应越小，疑似多打了 0，请核对纸质表');
+            if (v >= 2 * prev) add('warn', f.sheet, f.prg, cell, tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + '，比更短臂长 ' + prevB + 'm 的 ' + prev + ' 高出 ' + (v / prev).toFixed(1) + ' 倍，臂长越长载荷应越小，疑似多打了 0，请核对纸质表');
             else add('warn', f.sheet, f.prg, cell, tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + ' 略高于更短臂长 ' + prevB + 'm 的 ' + prev + '，请核对纸质表');
           }
           prev = v; prevB = boom;
@@ -390,7 +390,7 @@ function validate(found) {
         const cell = colLetter(f.ampCol + 1 + ci) + (c1.boomRow + 2);
         const dupI = list.findIndex(x => x.sheet === f.sheet && x.prg === f.prg && x.cell === cell && x.text.indexOf('同幅度 ') >= 0);
         if (dupI >= 0) list.splice(dupI, 1); // 比值已报的格，不再重复报跨臂长问题
-        add('err', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + fmtR(r0) + 'm = ' + v0 + '，是下一行 ' + fmtR(r1) + 'm（' + v1 + '）的 ' + (v0 / v1).toFixed(1) + ' 倍，疑似多打了 0，请核对纸质表');
+        add('warn', f.sheet, f.prg, cell, tag + ' 臂长 ' + boom + 'm、幅度 ' + fmtR(r0) + 'm = ' + v0 + '，是下一行 ' + fmtR(r1) + 'm（' + v1 + '）的 ' + (v0 / v1).toFixed(1) + ' 倍，疑似多打了 0，请核对纸质表');
       });
     }
     // 右表与原表比对（记录前 3 处明细；只比进程序的两组）
@@ -406,7 +406,7 @@ function validate(found) {
         }
       });
     });
-    if (diffN) add('err', f.sheet, f.prg, '', tag + ' 右表与原表重叠格有 ' + diffN + ' 处数值不同（' + diffEx.join('；') + '）');
+    if (diffN) add('warn', f.sheet, f.prg, '', tag + ' 右表与原表重叠格有 ' + diffN + ' 处数值不同（' + diffEx.join('；') + '）');
     // 右表臂长网格（只有右表真的有臂长时才比；单复本文件右表全是空，不报）
     const g1 = c1.booms.slice(0, 3).map(cleanBoom).join('/');
     const g2 = f.c2.booms.slice(0, 3).map(cleanBoom).join('/');
@@ -480,11 +480,11 @@ function columnIssues(grp, boom) {
   colVals.forEach((x, i) => {
     const cell = excelCellFor(grp, boom, x.rad);
     if (typeof x.v === 'string') {
-      out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + x.rad + 'm 一格内有文本 ' + JSON.stringify(x.v) + '，不是数字，请核对纸质表' });
+      out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + x.rad + 'm 一格内有文本 ' + JSON.stringify(x.v) + '，不是数字，请核对纸质表' });
       return;
     }
     if ((x.v === 0 || x.v === null || x.v === undefined) && minI >= 0 && i > minI && i < maxI) {
-      out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + x.rad + 'm 空白空洞' });
+      out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + x.rad + 'm 空白空洞' });
       return;
     }
     if (typeof x.v !== 'number') return;
@@ -497,12 +497,12 @@ function columnIssues(grp, boom) {
         const spike = typeof nextV === 'number' && nextV !== 0 && (x.v - prev) > 3 * scale && (x.v - nextV) > 3 * scale;
         if (typeof nextV === 'number' && nextV !== 0 && !spike) {
           prevIsDip = true;
-          if (dip > 1000) out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell: prevCell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表' });
+          if (dip > 1000) out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell: prevCell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表' });
           else out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell: prevCell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + 'm = ' + prev + '，比上下两格（' + prevPrev + '/' + x.v + '）都低 ' + dip + '，疑似孤立错数，请核对纸质表' });
         }
       }
     }
-    if (prev !== null && x.v > prev && !prevIsDip) out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律' });
+    if (prev !== null && x.v > prev && !prevIsDip) out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell, text: tag + ' 臂长 ' + bm + 'm、幅度 ' + prevR + '→' + x.rad + 'm 上升 ' + prev + '→' + x.v + '，违反递减规律' });
     prevPrev = prev; prev = x.v; prevR = x.rad; prevCell = cell; prevI = i;
   });
   return out;
@@ -528,9 +528,9 @@ function firstRowIssues(grp) {
     const boom = cleanBoom(parseFloat(bm));
     if (typeof v !== 'number' || v === 0) return;
     if (ratioHit[bm]) {
-      out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell: excelCellFor(grp, bm, r0), text: tag + ' 臂长 ' + boom + 'm、幅度 ' + fmtR(r0) + 'm = ' + ratioHit[bm].v0 + '，是下一行 ' + fmtR(r1) + 'm（' + ratioHit[bm].v1 + '）的 ' + (ratioHit[bm].v0 / ratioHit[bm].v1).toFixed(1) + ' 倍，疑似多打了 0，请核对纸质表' });
+      out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell: excelCellFor(grp, bm, r0), text: tag + ' 臂长 ' + boom + 'm、幅度 ' + fmtR(r0) + 'm = ' + ratioHit[bm].v0 + '，是下一行 ' + fmtR(r1) + 'm（' + ratioHit[bm].v1 + '）的 ' + (ratioHit[bm].v0 / ratioHit[bm].v1).toFixed(1) + ' 倍，疑似多打了 0，请核对纸质表' });
     } else if (prev !== null && v > prev) {
-      if (v >= 2 * prev) out.push({ level: 'err', sheet: state.sheet, prg: state.prg, cell: excelCellFor(grp, bm, r0), text: tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + '，比更短臂长 ' + prevB + 'm 的 ' + prev + ' 高出 ' + (v / prev).toFixed(1) + ' 倍，臂长越长载荷应越小，疑似多打了 0，请核对纸质表' });
+      if (v >= 2 * prev) out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell: excelCellFor(grp, bm, r0), text: tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + '，比更短臂长 ' + prevB + 'm 的 ' + prev + ' 高出 ' + (v / prev).toFixed(1) + ' 倍，臂长越长载荷应越小，疑似多打了 0，请核对纸质表' });
       else out.push({ level: 'warn', sheet: state.sheet, prg: state.prg, cell: excelCellFor(grp, bm, r0), text: tag + ' 同幅度 ' + fmtR(r0) + 'm 下，臂长 ' + boom + 'm = ' + v + ' 略高于更短臂长 ' + prevB + 'm 的 ' + prev + '，请核对纸质表' });
     }
     prev = v; prevB = boom;
@@ -763,12 +763,12 @@ function renderSegments() {
 /* 圈图：当前选中表（PRG + 组别）画成表格图，错误红圈、待确认黄圈、改过的蓝点 */
 function cellIssueLevel(grp, boom, rad) {
   const v = cellVal(grp, boom, rad);
-  if (typeof v === 'string') return 'err';
-  // 程序对比（主校验）：原表里本格与程序的值不同，直接标红
+  // 程序对比（主校验）：原表里本格与程序的值不同，直接标红（文本格也算差异）
   if (state.program && state.src === 'orig') {
     const pv = programValue(grp, boom, rad);
-    if (pv !== null && typeof v === 'number' && v !== pv) return 'err';
+    if (pv !== null && ((typeof v === 'number' && v !== pv) || typeof v === 'string')) return 'err';
   }
+  if (typeof v === 'string') return 'warn'; // 文本格：没程序对比时只是提示
   const vals = prgScope().map(r => cellVal(grp, boom, r));
   const idx = prgScope().indexOf(rad);
   const scale = colDecScale(vals);
@@ -781,7 +781,7 @@ function cellIssueLevel(grp, boom, rad) {
         const d2 = vals[idx + 2];
         if (typeof d2 === 'number' && d2 !== 0) {
           const spike = (below - v) > 3 * scale && (below - d2) > 3 * scale;
-          if (!spike) return dip > 1000 ? 'err' : 'warn';
+          if (!spike) return 'warn'; // 孤立低点只是提示
         }
       }
     }
@@ -801,21 +801,21 @@ function cellIssueLevel(grp, boom, rad) {
         }
       }
     }
-    if (!prevIsDip) return 'err';
+    if (!prevIsDip) return 'warn'; // 上升违反递减只是提示
   }
   if (typeof v === 'number' && v !== 0 && v % 100 !== 0) return 'warn';
   if (v === 0) {
     let hasBefore = false, hasAfter = false;
     for (let i = 0; i < idx; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) hasBefore = true; }
     for (let i = idx + 1; i < vals.length; i++) { if (typeof vals[i] === 'number' && vals[i] !== 0) hasAfter = true; }
-    if (hasBefore && hasAfter) return 'err';
+    if (hasBefore && hasAfter) return 'warn'; // 空白空洞只是提示
   }
   // 首行检查（与 validate() 同规则）：最小幅度行
   const scope0 = sheetScope();
   if (scope0.length >= 2 && rad === scope0[0] && typeof v === 'number' && v !== 0) {
     const r1 = scope0[1];
     const v1 = cellVal(grp, boom, r1);
-    if (typeof v1 === 'number' && v1 > 0 && v > 2 * v1) return 'err';
+    if (typeof v1 === 'number' && v1 > 0 && v > 2 * v1) return 'warn'; // 首行疑似多打 0 只是提示
     const b = block()[state.src][grp];
     const booms = grp === 'Half' ? [halfZero()].concat(b.booms.map(String)) : b.booms.map(String);
     const idxB = booms.indexOf(String(boom));
@@ -823,7 +823,7 @@ function cellIssueLevel(grp, boom, rad) {
       for (let j = idxB - 1; j >= 0; j--) {
         const pv = cellVal(grp, booms[j], rad);
         if (typeof pv === 'number' && pv !== 0) {
-          if (v > pv) return v >= 2 * pv ? 'err' : 'warn';
+          if (v > pv) return 'warn'; // 同幅度臂越长值越大只是提示
           break;
         }
       }
