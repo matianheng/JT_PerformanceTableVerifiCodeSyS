@@ -1182,6 +1182,7 @@ function programGridFor(sh, key, grp) {
 /* 当前选中格的程序值（无对应返回 null）；cellIssueLevel 用 */
 function programValue(grp, boom, rad) {
   if (!state.program || !state.data || state.src !== 'orig') return null;
+  if (grp === 'Half' && String(boom) === halfZero()) return null; // 快伸 13m 行没有对应的 Excel 列（13m 列属于全伸组），不参与程序对比
   const grid = programGridFor(state.sheet, state.prg, grp);
   if (!grid) return null;
   const r = nearestIdx(grid.armIdx, cleanBoom(parseFloat(boom)));
@@ -1206,7 +1207,7 @@ function programDiffIssues() {
         state.grp = grp;
         const grid = programGridFor(sh, key, grp);
         if (!grid) return;
-        const booms = grp === 'Full' ? blk.orig.Full.booms.map(String) : [halfZero()].concat(blk.orig.Half.booms.map(String));
+        const booms = grp === 'Full' ? blk.orig.Full.booms.map(String) : blk.orig.Half.booms.map(String); // 快伸 13m 行不参与程序对比（13m 列属于全伸组，已在 Full 里比过；拿它去比 Half_Weight[0] 会误报）
         const radii = prgScope();
         booms.forEach(bm => {
           const r = nearestIdx(grid.armIdx, cleanBoom(parseFloat(bm)));
