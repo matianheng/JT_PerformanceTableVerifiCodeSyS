@@ -1,13 +1,13 @@
 'use strict';
 /* 起重机性能表通用校验 + ST 代码生成
    通用原则：工具打开时什么都不知道；上传 Excel 后才解析、校验、生成。
-   数据模型：{ rawScopes:{表名:[幅度点]}, sheets:{ 表名:{ PRG:{label,titleRow,ampCol,rowMap,meta,orig:{Full,Half},filled:{Full,Half},extraGroups} } } }
+   数据模型：{ rawScopes:{表名:[幅度点]}, sheets:{ 表名:{ PRG:{label,titleRow,ampCol,rowMap,meta,orig:{Full,Half,Fast},filled:{Full,Half,Fast},extraGroups} } } }
    rows: { '13': {'3.0':100000,...} } 缺失填 0，文本格原样保留字符串
-   组别：每块的臂长按“递减处分段”自动分出多组；第 1 组→全伸数组，第 2 组→快伸数组，其余组程序无对应数组，只记录、不出代码。 */
+   组别：每块的臂长按“递减处分段”自动分出多组；第 1 组→全伸数组，第 2 组→快伸数组，第 3 组→Fast 数组，其余组程序无对应数组，只记录、不出代码。 */
 const LS_KEY = 'jt_perf_upload_v2';   // localStorage：上次上传的 Excel 解析结果（v1 旧结构已废弃，不再读）
 const CFG_KEY = 'jt_perf_cfg_v1';     // localStorage：程序配置
 const PROG_KEY = 'jt_prog_v1';        // localStorage：上次上传的程序解析结果（POU 表数据）
-const DEFAULT_CFG = { arrFull: 'Full_Weight', arrHalf: 'Half_Weight', arrArm: 'Arm_Length_Weight_Point', arrScope: 'Scope_Weight_Point', guard: 'NOT TeleOut_Fast_Control_LMI', hy: 'HY', cap: 30, prefix: {} };
+const DEFAULT_CFG = { arrFull: 'Full_Weight', arrHalf: 'Half_Weight', arrFast: 'Fast_Weight', arrArm: 'Arm_Length_Weight_Point', arrScope: 'Scope_Weight_Point', guard: 'NOT TeleOut_Fast_Control_LMI', hy: 'HY', cap: 30, prefix: {} };
 
 function loadCfg() {
   try {
@@ -60,7 +60,7 @@ function prgScope() {
   const base = sheetScope();
   const b = block();
   const extras = new Set();
-  ['Full', 'Half'].forEach(g => {
+  ['Full', 'Half', 'Fast'].forEach(g => {
     const ex = b[state.src][g].extra || {};
     Object.keys(ex).forEach(k => extras.add(parseFloat(k)));
   });
@@ -116,7 +116,7 @@ function splitGroups(booms) {
 }
 function toGroups(copy, rawScope, groupIdxs) {
   const groups = {};
-  [['Full', 0], ['Half', 1]].forEach(([g, gi]) => {
+  [['Full', 0], ['Half', 1], ['Fast', 2]].forEach(([g, gi]) => {
     const idxs = groupIdxs[gi] || [];
     const blist = idxs.map(i => cleanBoom(copy.booms[i]));
     const rows = {};
@@ -142,7 +142,7 @@ function toGroups(copy, rawScope, groupIdxs) {
     });
     groups[g] = { booms: blist, rows, extra };
   });
-  const extraGroups = groupIdxs.slice(2).map(idxs => idxs.map(i => cleanBoom(copy.booms[i])));
+  const extraGroups = groupIdxs.slice(3).map(idxs => idxs.map(i => cleanBoom(copy.booms[i])));
   return { groups, extraGroups };
 }
 /* 幅度重复修正：恰好一个重复值、主序列里恰好缺一个值、且缺失值是重复值在主序列里的前一项时，把第一次出现的重复行改标为缺失值 */
@@ -159,6 +159,31 @@ function fixDupRadius(copy, rawScope) {
     return { dup, fixed: missing[0] };
   }
   return null;
+}
+/* 一格两个数（如 "2100\n800"）：按同列随幅度递减的趋势取数。
+   候选数里恰好一个能接上（小于上一行、大于下一行）的取它，并记一条 note；
+   否则不动（继续按文本处理）。就地改写 copy.rows，调用点与 fixDupRadius 相同。 */
+function fixMultiNumCells(copy, ampCol) {
+  const notes = [];
+  if (!copy || !copy.rows || !copy.booms) return notes;
+  for (let ci = 0; ci < copy.booms.length; ci++) {
+    const boom = cleanBoom(copy.booms[ci]);
+    if (typeof boom !== 'number') continue;
+    for (let i = 0; i < copy.rows.length; i++) {
+      const raw = copy.rows[i].vals[ci];
+      if (typeof raw !== 'string') continue;
+      const nums = (raw.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+      if (nums.length < 2) continue;
+      let prev = null, next = null;
+      for (let k = i - 1; k >= 0; k--) { const v = copy.rows[k].vals[ci]; if (typeof v === 'number' && v !== 0) { prev = v; break; } }
+      for (let k = i + 1; k < copy.rows.length; k++) { const v = copy.rows[k].vals[ci]; if (typeof v === 'number' && v !== 0) { next = v; break; } }
+      const fits = nums.filter(n => (prev === null || n < prev) && (next === null || n > next));
+      if (fits.length !== 1) continue;
+      copy.rows[i].vals[ci] = fits[0];
+      notes.push({ boom, radius: copy.rows[i].radius, raw, picked: fits[0], cell: colLetter(ampCol + 1 + ci) + (copy.boomRow + 2 + i) });
+    }
+  }
+  return notes;
 }
 function titleInfo(leftTitle, rightTitle) {
   const t = String(leftTitle || '') + ' ' + String(rightTitle || '');
@@ -219,6 +244,7 @@ function parseWorkbook(wb) {
     const prgKey = prgKeyOf(meta);
     const rawScope = data.rawScopes[b.sheet];
     const fix = fixDupRadius(b.c1, rawScope);
+    const multiNotes = fixMultiNumCells(b.c1, b.ampCol);
     const groupIdxs = splitGroups(b.c1.booms);
     const g1 = toGroups(b.c1, rawScope, groupIdxs);
     const g3 = toGroups(b.c3, rawScope, groupIdxs);
@@ -228,11 +254,11 @@ function parseWorkbook(wb) {
     sheetData[prgKey] = {
       label: (letter === 'F' ? '全伸 ' : '半伸 ') + info.cw + 't 后移' + (info.back === null ? '—' : info.back),
       titleRow: b.titleRow, ampCol: b.ampCol, rowMap, meta,
-      groupStarts: { Full: (groupIdxs[0] || [])[0] || 0, Half: (groupIdxs[1] || [])[0] || 0 },
+      groupStarts: { Full: (groupIdxs[0] || [])[0] || 0, Half: (groupIdxs[1] || [])[0] || 0, Fast: (groupIdxs[2] || [])[0] || 0 },
       extraGroups: g1.extraGroups,
       orig: g1.groups, filled: g3.groups,
     };
-    found.push({ sheet: b.sheet, prg: prgKey, c1: b.c1, c2: b.c2, c3: b.c3, fix, titleRow: b.titleRow, span: info.span, cw: info.cw, back: meta.back, ampCol: b.ampCol, letter, spanRankSize: spans.length, groupIdxs, rawScope });
+    found.push({ sheet: b.sheet, prg: prgKey, c1: b.c1, c2: b.c2, c3: b.c3, fix, multiNotes, titleRow: b.titleRow, span: info.span, cw: info.cw, back: meta.back, ampCol: b.ampCol, letter, spanRankSize: spans.length, groupIdxs, rawScope });
   });
   return { data, found };
 }
@@ -306,6 +332,8 @@ function validate(found) {
       const sum = cwM[1].split('+').reduce((s, x) => s + (parseFloat(x) || 0), 0);
       if (Math.abs(sum - parseFloat(tonM[1])) > 0.01) add('warn', f.sheet, f.prg, '标题行', tag + ' 配重标题 ' + tonM[1] + 't ≠ 分量和 ' + sum + 't');
     }
+    // 一格两个数：已按同列递减趋势取过数（只作提示，不是差异）
+    (f.multiNotes || []).forEach(n => add('warn', f.sheet, f.prg, n.cell, tag + ' 臂长 ' + n.boom + 'm、幅度 ' + fmtR(n.radius) + 'm 一格两个数 ' + JSON.stringify(n.raw) + '，已按同列递减趋势取 ' + n.picked + '，如与纸质表不符请改回'));
     // 幅度重复 / 缺失
     if (f.fix) add('warn', f.sheet, f.prg, 'B列', tag + ' 幅度 ' + fmtR(f.fix.dup) + 'm 出现两次、' + fmtR(f.fix.fixed) + 'm 缺失，已按趋势把第一行 ' + fmtR(f.fix.dup) + ' 当作 ' + fmtR(f.fix.fixed) + ' 处理');
     else {
@@ -320,8 +348,8 @@ function validate(found) {
     // 附加幅度行（不在主序列内的幅度，如 2.5m）
     const extraRadii = c1.rows.map(r => r.radius).filter(x => typeof x === 'number' && !f.rawScope.includes(x));
     if (extraRadii.length) add('info', f.sheet, f.prg, '', tag + ' 有 ' + extraRadii.map(fmtR).join('/') + 'm 幅度行（不在主幅度序列内），ST 会作为附加列生成');
-    // 逐列检查（只查进程序的两组：全伸组 + 快伸组）
-    const colIdxs = (f.groupIdxs[0] || []).concat(f.groupIdxs[1] || []);
+    // 逐列检查（只查进程序的三组：全伸组 + 快伸组 + Fast 组）
+    const colIdxs = (f.groupIdxs[0] || []).concat(f.groupIdxs[1] || [], f.groupIdxs[2] || []);
     colIdxs.forEach(ci => {
       const boom = cleanBoom(c1.booms[ci]);
       let prev = null, prevR = null, prevCell = null, prevPrev = null, prevI = -1;
@@ -368,6 +396,7 @@ function validate(found) {
       const groups = [
         { name: 'Full', idxs: f.groupIdxs[0] || [] },
         { name: 'Half', idxs: ((f.groupIdxs[0] && f.groupIdxs[0][0] !== undefined) ? [f.groupIdxs[0][0]] : []).concat(f.groupIdxs[1] || []) },
+        { name: 'Fast', idxs: f.groupIdxs[2] || [] },
       ];
       groups.forEach(g => {
         let prev = null, prevB = null;
@@ -435,7 +464,7 @@ function boomIndex(boom) {
   if (state.grp === 'Half') return String(boom) === halfZero() ? 0 : grpData().booms.map(String).indexOf(String(boom)) + 1;
   return grpData().booms.map(String).indexOf(String(boom));
 }
-function arrName() { return state.grp === 'Full' ? state.cfg.arrFull : state.cfg.arrHalf; }
+function arrName() { return state.grp === 'Full' ? state.cfg.arrFull : state.grp === 'Half' ? state.cfg.arrHalf : state.cfg.arrFast; }
 function cellVal(grp, boom, rad) {
   const g = block()[state.src][grp];
   const key = rk(rad);
@@ -461,6 +490,7 @@ function excelCellFor(grp, boom, rad) {
   const bl = b[state.src][grp].booms.map(String);
   let ci = bl.indexOf(String(boom));
   if (grp === 'Half') ci = String(boom) === halfZero() ? 0 : b.groupStarts.Half + ci;
+  if (grp === 'Fast') ci = b.groupStarts.Fast + ci;
   const col = colLetter(b.ampCol + 1 + ci);
   const row = b.rowMap ? b.rowMap[rk(rad)] : null;
   return col + (row !== null && row !== undefined ? row + 1 : '?');
@@ -546,11 +576,11 @@ function applyEdit(grp, boom, rad, newVal) {
   if (state.src === 'orig') {
     const needle = '臂长 ' + cleanBoom(parseFloat(boom)) + 'm、幅度 ';
     issuesTrend = issuesTrend.filter(i => !(i.sheet === state.sheet && i.prg === state.prg && (i.text.indexOf(needle) >= 0 || i.text.indexOf('同幅度 ') >= 0 || i.text.indexOf('是下一行 ') >= 0)));
-    ['Full', 'Half'].forEach(g => {
+    ['Full', 'Half', 'Fast'].forEach(g => {
       const bl = block()[state.src][g].booms.map(String);
       if (bl.includes(String(boom)) || (g === 'Half' && String(boom) === halfZero())) issuesTrend = issuesTrend.concat(columnIssues(g, boom));
     });
-    ['Full', 'Half'].forEach(g => { issuesTrend = issuesTrend.concat(firstRowIssues(g)); });
+    ['Full', 'Half', 'Fast'].forEach(g => { issuesTrend = issuesTrend.concat(firstRowIssues(g)); });
     issues = mergeProgramDiffs(issuesTrend); // 改过的格与程序的对比跟着重算
   }
   renderValidation(); renderOut(); renderEdits(); drawErrorImage();
@@ -639,6 +669,13 @@ function fullPRGText() {
   [f0].concat(halfBooms.map(String)).forEach(bm => { t += stLinesFor('Half', bm) + '\n\n'; });
   const halfCount = halfBooms.length + 1;
   for (let r = halfCount; r <= 9; r++) { scope.forEach((rad, j) => { t += '\t' + cfg.arrHalf + '[' + r + ',' + j + ']:= 0 ;\n'; }); t += '\n'; }
+  const fastBooms = b[state.src]['Fast'] ? b[state.src]['Fast']['booms'] : [];
+  if (fastBooms.length) {
+    t += '\n(*Fast 性能表*)\n';
+    fastBooms.forEach(bm => { t += stLinesFor('Fast', String(bm)) + '\n\n'; });
+    const fastCount = fastBooms.length;
+    for (let r = fastCount; r <= 9; r++) { scope.forEach((rad, j) => { t += '\t' + cfg.arrFast + '[' + r + ',' + j + ']:= 0 ;\n'; }); t += '\n'; }
+  }
   t += 'RETURN;\n';
   return t;
 }
@@ -708,7 +745,7 @@ function renderInfo() {
   const w = $('blockWarn');
   const warns = issues.filter(i => i.prg === state.prg && i.sheet === state.sheet && i.level !== 'info').map(i => (i.level === 'err' ? '🔴 ' : '🟡 ') + esc(i.text));
   const notes = [];
-  if (b.extraGroups && b.extraGroups.length) notes.push('本块另有第 ' + (b.extraGroups.map((g, i) => (i + 3) + ' 组（' + g.map(fmtB).join('/') + 'm）').join('、')) + '，程序里没有对应数组，未生成 ST 代码。');
+  if (b.extraGroups && b.extraGroups.length) notes.push('本块另有第 ' + (b.extraGroups.map((g, i) => (i + 4) + ' 组（' + g.map(fmtB).join('/') + 'm）').join('、')) + '，程序里没有对应数组，未生成 ST 代码。');
   const cap = parseInt(state.cfg.cap, 10);
   const scopeLen = sheetScope().length;
   if (cap > 0 && scopeLen > cap + 1) {
@@ -754,7 +791,7 @@ function renderSegments() {
   if (!state.data) { el.innerHTML = ''; return; }
   const b = block();
   let html = '';
-  [['Full', '全伸组'], ['Half', '快伸组']].forEach(([g, label]) => {
+  [['Full', '全伸组'], ['Half', '快伸组'], ['Fast', 'Fast组']].forEach(([g, label]) => {
     const booms = g === 'Half' ? [halfZero()].concat(b[state.src][g].booms.map(String)) : b[state.src][g].booms.map(String);
     booms.forEach(bm => { html += '<button data-grp="' + g + '" data-boom="' + bm + '">' + label + ' ' + fmtB(parseFloat(bm)) + 'm 📋</button>'; });
   });
@@ -838,7 +875,7 @@ function computeCircleTables() {
   const out = [];
   Object.keys(state.data.sheets).forEach(sh => {
     Object.keys(state.data.sheets[sh]).forEach(prg => {
-      ['Full', 'Half'].forEach(g => {
+      ['Full', 'Half', 'Fast'].forEach(g => {
         state.sheet = sh; state.prg = prg; state.grp = g;
         const b = block()[state.src][g];
         const booms = g === 'Half' ? [halfZero()].concat(b.booms.map(String)) : b.booms.map(String);
@@ -883,9 +920,9 @@ function renderCircleJump() {
   const el = $('circleJump'); if (!el) return;
   if (!state.data) { el.innerHTML = ''; return; }
   const list = state.circleTables || [];
-  const total = Object.keys(state.data.sheets).reduce((s, sh) => s + Object.keys(state.data.sheets[sh]).length, 0) * 2;
+  const total = Object.keys(state.data.sheets).reduce((s, sh) => s + Object.keys(state.data.sheets[sh]).length, 0) * 3;
   if (!list.length) { el.innerHTML = '<span class="sub">全部 ' + total + ' 个表都没有错误格。</span>'; return; }
-  const gName = g => g === 'Full' ? '全伸组' : '快伸组';
+  const gName = g => ({ Full: '全伸组', Half: '快伸组', Fast: 'Fast组' })[g] || g;
   el.innerHTML = '<span class="sub">有圈的表（点一下跳过去看圈）：</span>' + list.map((t, i) =>
     '<button data-i="' + i + '">' + t.sheet.replace('模式', '') + ' ' + displayPrg(t.sheet, state.data.sheets[t.sheet][t.prg]) + ' ' + gName(t.grp) + ' 🔴' + t.err + ' 🟡' + t.warn + '</button>').join('');
 }
@@ -911,7 +948,7 @@ function drawErrorImage() {
   cv.width = W; cv.height = H;
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
   ctx.fillStyle = '#111'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText(state.sheet + ' · ' + displayPrg(state.sheet, b) + '（' + b.label + '）· ' + (state.grp === 'Full' ? '全伸组' : '快伸组') + ' · ' + (state.src === 'orig' ? '原表' : '填充版'), 10, 18);
+  ctx.fillText(state.sheet + ' · ' + displayPrg(state.sheet, b) + '（' + b.label + '）· ' + ({ Full: '全伸组', Half: '快伸组', Fast: 'Fast组' })[state.grp] + ' · ' + (state.src === 'orig' ? '原表' : '填充版'), 10, 18);
   ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
   ctx.fillText('数据：' + state.dataLabel + '　' + new Date().toLocaleDateString(), 10, 38);
   ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
@@ -978,7 +1015,7 @@ function renderPrefixBox() {
   el.innerHTML = html;
 }
 function syncCfgInputs() {
-  const m = { cfgArrFull: 'arrFull', cfgArrHalf: 'arrHalf', cfgArrArm: 'arrArm', cfgArrScope: 'arrScope', cfgGuard: 'guard', cfgHy: 'hy', cfgCap: 'cap' };
+  const m = { cfgArrFull: 'arrFull', cfgArrHalf: 'arrHalf', cfgArrFast: 'arrFast', cfgArrArm: 'arrArm', cfgArrScope: 'arrScope', cfgGuard: 'guard', cfgHy: 'hy', cfgCap: 'cap' };
   Object.keys(m).forEach(id => { const el = $(id); if (el) el.value = state.cfg[m[id]]; });
 }
 function renderAll() { renderSheets(); renderPrgs(); renderInfo(); renderBooms(); renderOut(); renderSegments(); renderEdits(); drawErrorImage(); }
@@ -1044,6 +1081,7 @@ function parseProgram(text) {
   const cfg = state.cfg;
   const reFull = new RegExp(escRe(cfg.arrFull) + '\\[(\\d+),(\\d+)\\]:=\\s*(-?\\d+)\\s*;', 'g');
   const reHalf = new RegExp(escRe(cfg.arrHalf) + '\\[(\\d+),(\\d+)\\]:=\\s*(-?\\d+)\\s*;', 'g');
+  const reFast = new RegExp(escRe(cfg.arrFast) + '\\[(\\d+),(\\d+)\\]:=\\s*(-?\\d+)\\s*;', 'g');
   const reArm = new RegExp(escRe(cfg.arrArm) + '\\[(\\d+)\\]:=\\s*([\\d.]+)\\s*;', 'g');
   const reScope = new RegExp(escRe(cfg.arrScope) + '\\[(\\d+)\\]:=\\s*([\\d.]+)\\s*;', 'g');
   const hasFull = new RegExp(escRe(cfg.arrFull) + '\\[\\d+,\\d+\\]:=\\s*\\d+');
@@ -1058,10 +1096,11 @@ function parseProgram(text) {
     if (Object.keys(cur).length) blocks.push(cur);
     const scope = {};
     [...body.matchAll(reScope)].forEach(m => { scope[parseInt(m[1], 10)] = parseFloat(m[2]); });
-    const full = {}, half = {};
+    const full = {}, half = {}, fast = {};
     [...body.matchAll(reFull)].forEach(m => { full[m[1] + ',' + m[2]] = parseInt(m[3], 10); });
     [...body.matchAll(reHalf)].forEach(m => { half[m[1] + ',' + m[2]] = parseInt(m[3], 10); });
-    return { fullArm: blocks[0] || {}, halfArm: blocks[1] || blocks[0] || {}, scope, full, half };
+    [...body.matchAll(reFast)].forEach(m => { fast[m[1] + ',' + m[2]] = parseInt(m[3], 10); });
+    return { fullArm: blocks[0] || {}, halfArm: blocks[1] || blocks[0] || {}, fastArm: blocks[2] || {}, scope, full, half, fast };
   }
   const pous = {};
   // .export：TextBlob 里找含赋值的那块，归属取最近的上一个 Name 元素
@@ -1170,12 +1209,13 @@ function programGridFor(sh, key, grp) {
   const pouName = programPouFor(sh, key);
   if (!pouName) { cache[cacheKey] = null; return null; }
   const P = state.program.pous[pouName];
-  const arm = grp === 'Full' ? P.fullArm : P.halfArm;
+  if (grp === 'Fast' && (!P.fast || !Object.keys(P.fast).length)) { cache[cacheKey] = null; return null; } // 程序里没有 Fast_Weight 代码：不参与对比（用户按提示生成代码块补进程序）
+  const arm = grp === 'Full' ? P.fullArm : grp === 'Half' ? P.halfArm : P.fastArm;
   const armIdx = {};
   Object.keys(arm).forEach(i => { armIdx[cleanBoom(arm[i])] = parseInt(i, 10); });
   const scopeIdx = {};
   Object.keys(P.scope).forEach(i => { scopeIdx[cleanBoom(P.scope[i])] = parseInt(i, 10); });
-  const grid = { armIdx, scopeIdx, arr: grp === 'Full' ? P.full : P.half };
+  const grid = { armIdx, scopeIdx, arr: grp === 'Full' ? P.full : grp === 'Half' ? P.half : P.fast };
   cache[cacheKey] = grid;
   return grid;
 }
@@ -1203,11 +1243,11 @@ function programDiffIssues() {
       state.sheet = sh; state.prg = key;
       const blk = state.data.sheets[sh][key];
       const tag = sh + ' · ' + key + '（R' + blk.titleRow + '）';
-      ['Full', 'Half'].forEach(grp => {
+      ['Full', 'Half', 'Fast'].forEach(grp => {
         state.grp = grp;
         const grid = programGridFor(sh, key, grp);
         if (!grid) return;
-        const booms = grp === 'Full' ? blk.orig.Full.booms.map(String) : blk.orig.Half.booms.map(String); // 快伸 13m 行不参与程序对比（13m 列属于全伸组，已在 Full 里比过；拿它去比 Half_Weight[0] 会误报）
+        const booms = blk.orig[grp].booms.map(String); // Half 的 booms 不含 halfZero（快伸 13m 行不参与程序对比，13m 列属于全伸组，已在 Full 里比过）
         const radii = prgScope();
         booms.forEach(bm => {
           const r = nearestIdx(grid.armIdx, cleanBoom(parseFloat(bm)));
@@ -1315,6 +1355,9 @@ function renderProgInfo() {
     return (blk ? sh.replace('模式', '') + ' ' + displayPrg(sh, blk) : sh + ' ' + key) + ' ' + n;
   });
   let html = '已载入程序 <b>' + esc(p.name) + '</b>（' + esc(p.format) + '，' + nPou + ' 个工况表）：与 Excel 共 <b>' + diffs.length + '</b> 处不同，已标红。';
+  const nFast = Object.values(p.pous).filter(P => P.fast && Object.keys(P.fast).length).length;
+  if (nFast === 0) html += '<br>⚠️ 程序里<b>没有 Fast_Weight 代码</b>：Fast 组只生成、不对比。请在第 3 节复制整表 ST（已含 Fast_Weight 代码块）补进程序，补完重新上传程序文件即可对比。';
+  else html += '<br>✅ 程序里有 Fast_Weight 代码（' + nFast + ' 个表），Fast 组已参与对比。';
   if (parts.length) html += '<br>分表：' + esc(parts.join(' · ')) + '。';
   if ((p.missingPrg || []).length) html += '<br>Excel 有、程序没有的表：' + esc(p.missingPrg.map(k => { const [sh, key] = k.split('|'); return sh.replace('模式', '') + ' ' + key; }).join('、')) + '。';
   if ((p.unmatched || []).length) html += '<br>程序有、Excel 没有的表：' + esc(p.unmatched.join('、')) + '。';
@@ -1353,7 +1396,7 @@ $('lkGo').onclick = () => {
   const r = lookupValue(grp, boom, rad);
   state.grp = saved;
   if (r.error) { $('lkOut').innerHTML = '<div class="err">' + esc(r.error) + '</div>'; return; }
-  let html = '<div class="info">当前工况 <b>' + state.sheet + ' · ' + displayPrg(state.sheet, block()) + '</b>（' + (grp === 'Full' ? '全伸组' : '快伸组') + '）｜臂长 ' + boom + 'm、幅度 ' + rad + 'm<br>' +
+  let html = '<div class="info">当前工况 <b>' + state.sheet + ' · ' + displayPrg(state.sheet, block()) + '</b>（' + ({ Full: '全伸组', Half: '快伸组', Fast: 'Fast组' })[grp] + '）｜臂长 ' + boom + 'm、幅度 ' + rad + 'm<br>' +
     '插值点：臂长 ' + r.corners.b0 + '～' + r.corners.b1 + 'm，幅度 ' + r.corners.r0 + '～' + r.corners.r1 + 'm；四角值 ' + r.corners.v00 + ' / ' + r.corners.v01 + ' / ' + r.corners.v10 + ' / ' + r.corners.v11 + ' kg<br>' +
     '额定载荷：<span class="big">' + r.rated.toLocaleString() + ' kg</span>';
   if (r.notes.length) html += '<br>⚠️ ' + esc(r.notes.join('；'));
@@ -1420,7 +1463,7 @@ function refreshAfterCfg() {
     computeCircleTables(); renderCircleJump();
   }
 }
-[['cfgArrFull', 'arrFull'], ['cfgArrHalf', 'arrHalf'], ['cfgArrArm', 'arrArm'], ['cfgArrScope', 'arrScope'], ['cfgGuard', 'guard'], ['cfgHy', 'hy'], ['cfgCap', 'cap']].forEach(([id, key]) => {
+[['cfgArrFull', 'arrFull'], ['cfgArrHalf', 'arrHalf'], ['cfgArrFast', 'arrFast'], ['cfgArrArm', 'arrArm'], ['cfgArrScope', 'arrScope'], ['cfgGuard', 'guard'], ['cfgHy', 'hy'], ['cfgCap', 'cap']].forEach(([id, key]) => {
   const el = $(id);
   if (!el) return;
   el.addEventListener('input', () => {
