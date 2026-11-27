@@ -1390,6 +1390,18 @@ function renderProgInfo() {
   if (nFastAny === 0) html += '<br>⚠️ 程序里<b>没有 Fast_Weight 代码</b>：Fast 组只生成、不对比。请在第 3 节复制整表 ST（已含 Fast_Weight 代码块）补进程序，补完重新上传程序文件即可对比。';
   else if (nFastFull < nFastAny) html += '<br>⚠️ 程序里有 Fast_Weight 代码（' + nFastAny + ' 个表），但只有 ' + nFastFull + ' 个表的行数贴全了：不全的表 Fast 组只生成、不对比，贴全后重新上传程序文件即可对比。';
   else html += '<br>✅ 程序里有 Fast_Weight 代码（' + nFastFull + ' 个表，均已贴全），Fast 组已参与对比。';
+  // 不全的表：逐个列出缺哪些臂长（按程序 Fast 臂长表核对），让用户知道具体要补哪几行
+  const incomplete = Object.entries(p.pous).filter(([nm, P]) => {
+    if (!P.fast || !Object.keys(P.fast).length) return false;
+    const rows = new Set(Object.keys(P.fast).map(k => k.split(',')[0]));
+    const n = Object.keys(P.fastArm || {}).length;
+    return n && rows.size < n;
+  }).map(([nm, P]) => {
+    const rows = new Set(Object.keys(P.fast).map(k => k.split(',')[0]));
+    const missing = Object.keys(P.fastArm).filter(i => !rows.has(String(i))).map(i => cleanBoom(P.fastArm[i]));
+    return nm.slice('Working_Table_'.length) + ' 缺 ' + missing.join('m、') + 'm';
+  });
+  if (incomplete.length) html += '<br>缺臂长的表：' + esc(incomplete.join('；')) + '。请在第 3 节复制对应表的 Fast_Weight 代码块补进程序。';
   if (parts.length) html += '<br>分表：' + esc(parts.join(' · ')) + '。';
   if ((p.missingPrg || []).length) html += '<br>Excel 有、程序没有的表：' + esc(p.missingPrg.map(k => { const [sh, key] = k.split('|'); return sh.replace('模式', '') + ' ' + key; }).join('、')) + '。';
   if ((p.unmatched || []).length) html += '<br>程序有、Excel 没有的表：' + esc(p.unmatched.join('、')) + '。';
