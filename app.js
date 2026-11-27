@@ -1100,7 +1100,23 @@ function parseProgram(text) {
     [...body.matchAll(reFull)].forEach(m => { full[m[1] + ',' + m[2]] = parseInt(m[3], 10); });
     [...body.matchAll(reHalf)].forEach(m => { half[m[1] + ',' + m[2]] = parseInt(m[3], 10); });
     [...body.matchAll(reFast)].forEach(m => { fast[m[1] + ',' + m[2]] = parseInt(m[3], 10); });
-    return { fullArm: blocks[0] || {}, halfArm: blocks[1] || blocks[0] || {}, fastArm: blocks[2] || {}, scope, full, half, fast };
+    // 臂长块按内容认组，不按出现顺序（兼容两分支和三分支）：
+    // 全伸=最长的一块；快伸=以 13.0 开头的其余块；Fast=不以 13.0 开头的块。
+    // V001.8 两分支：全伸 9 根、快伸 7 根；V001.9 三分支：快伸 7 根、Fast 7 根、全伸 9 根。
+    let fullArm = {}, halfArm = {}, fastArm = {};
+    if (blocks.length) {
+      let fi = 0;
+      blocks.forEach((b, i) => { if (Object.keys(b).length > Object.keys(blocks[fi]).length) fi = i; });
+      fullArm = blocks[fi] || {};
+      blocks.forEach((b, i) => {
+        if (i === fi) return;
+        const first = b[0];
+        if (first !== undefined && Math.abs(first - 13.0) <= 0.15) { if (!Object.keys(halfArm).length) halfArm = b; }
+        else if (!Object.keys(fastArm).length) fastArm = b;
+      });
+      if (!Object.keys(halfArm).length) halfArm = fullArm; // 只有一块时：快伸沿用全伸
+    }
+    return { fullArm, halfArm, fastArm, scope, full, half, fast };
   }
   const pous = {};
   // .export：TextBlob 里找含赋值的那块，归属取最近的上一个 Name 元素
@@ -1209,7 +1225,14 @@ function programGridFor(sh, key, grp) {
   const pouName = programPouFor(sh, key);
   if (!pouName) { cache[cacheKey] = null; return null; }
   const P = state.program.pous[pouName];
-  if (grp === 'Fast' && (!P.fast || !Object.keys(P.fast).length)) { cache[cacheKey] = null; return null; } // 程序里没有 Fast_Weight 代码：不参与对比（用户按提示生成代码块补进程序）
+  if (grp === 'Fast') {
+    // 程序里没有 Fast_Weight 代码，或只有部分行（不全）：不参与对比，用户按提示生成代码块补进程序。
+    // “全”的标准：Fast_Weight 的行数 ≥ Fast 臂长数（如 HC38 应有 6 行，只贴了第 0 行就不算全）。
+    if (!P.fast || !Object.keys(P.fast).length) { cache[cacheKey] = null; return null; }
+    const fastRows = new Set(Object.keys(P.fast).map(k => k.split(',')[0]));
+    const fastArmCount = Object.keys(P.fastArm || {}).length;
+    if (fastArmCount && fastRows.size < fastArmCount) { cache[cacheKey] = null; return null; }
+  }
   const arm = grp === 'Full' ? P.fullArm : grp === 'Half' ? P.halfArm : P.fastArm;
   const armIdx = {};
   Object.keys(arm).forEach(i => { armIdx[cleanBoom(arm[i])] = parseInt(i, 10); });
@@ -1355,9 +1378,18 @@ function renderProgInfo() {
     return (blk ? sh.replace('模式', '') + ' ' + displayPrg(sh, blk) : sh + ' ' + key) + ' ' + n;
   });
   let html = '已载入程序 <b>' + esc(p.name) + '</b>（' + esc(p.format) + '，' + nPou + ' 个工况表）：与 Excel 共 <b>' + diffs.length + '</b> 处不同，已标红。';
-  const nFast = Object.values(p.pous).filter(P => P.fast && Object.keys(P.fast).length).length;
-  if (nFast === 0) html += '<br>⚠️ 程序里<b>没有 Fast_Weight 代码</b>：Fast 组只生成、不对比。请在第 3 节复制整表 ST（已含 Fast_Weight 代码块）补进程序，补完重新上传程序文件即可对比。';
-  else html += '<br>✅ 程序里有 Fast_Weight 代码（' + nFast + ' 个表），Fast 组已参与对比。';
+  // Fast 状态分三档：没有 / 有但不全（只贴了部分行）/ 全。只“全”的表才参与对比，其余只生成、不对比。
+  const fastComplete = P => {
+    if (!P.fast || !Object.keys(P.fast).length) return false;
+    const rows = new Set(Object.keys(P.fast).map(k => k.split(',')[0]));
+    const n = Object.keys(P.fastArm || {}).length;
+    return !n || rows.size >= n;
+  };
+  const nFastAny = Object.values(p.pous).filter(P => P.fast && Object.keys(P.fast).length).length;
+  const nFastFull = Object.values(p.pous).filter(fastComplete).length;
+  if (nFastAny === 0) html += '<br>⚠️ 程序里<b>没有 Fast_Weight 代码</b>：Fast 组只生成、不对比。请在第 3 节复制整表 ST（已含 Fast_Weight 代码块）补进程序，补完重新上传程序文件即可对比。';
+  else if (nFastFull < nFastAny) html += '<br>⚠️ 程序里有 Fast_Weight 代码（' + nFastAny + ' 个表），但只有 ' + nFastFull + ' 个表的行数贴全了：不全的表 Fast 组只生成、不对比，贴全后重新上传程序文件即可对比。';
+  else html += '<br>✅ 程序里有 Fast_Weight 代码（' + nFastFull + ' 个表，均已贴全），Fast 组已参与对比。';
   if (parts.length) html += '<br>分表：' + esc(parts.join(' · ')) + '。';
   if ((p.missingPrg || []).length) html += '<br>Excel 有、程序没有的表：' + esc(p.missingPrg.map(k => { const [sh, key] = k.split('|'); return sh.replace('模式', '') + ' ' + key; }).join('、')) + '。';
   if ((p.unmatched || []).length) html += '<br>程序有、Excel 没有的表：' + esc(p.unmatched.join('、')) + '。';
