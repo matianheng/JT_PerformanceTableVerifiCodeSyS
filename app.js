@@ -86,16 +86,25 @@ function parseBlock(grid, ampCol, headRow, off, extraOverride) {
   const title = rowTitle(grid, titleRow, ampCol + off, ampCol + off + 23);
   const extra = extraOverride !== undefined ? extraOverride : (grid[headRow + 1] && grid[headRow + 1][ampCol + 1 + off] === 0);
   const boomRow = extra ? headRow + 2 : headRow + 1;
+  // 臂长列数不固定（新表 Fast 组 7 根、共 22 列；旧表 21 列）：沿臂长行数到第一个非数字格，最多 24 列（一个复本的步长）。
+  // 21 列写死会丢最后一根臂长（如 HC38 的 Fast 46m）。
+  let nBoom = 0;
+  while (nBoom < 24) {
+    const v = grid[boomRow] ? grid[boomRow][ampCol + 1 + off + nBoom] : null;
+    if (typeof v !== 'number') break;
+    nBoom++;
+  }
+  if (!nBoom) nBoom = 21;
   const booms = [];
-  for (let i = 0; i < 21; i++) booms.push(grid[boomRow] ? grid[boomRow][ampCol + 1 + off + i] : null);
-  const rows = []; // {radius, vals[21], sheetRow}
+  for (let i = 0; i < nBoom; i++) booms.push(grid[boomRow] ? grid[boomRow][ampCol + 1 + off + i] : null);
+  const rows = []; // {radius, vals[nBoom], sheetRow}
   let r = boomRow + 1;
   while (r < grid.length) {
     const a = grid[r] ? grid[r][ampCol + off] : null;
     if (typeof a === 'string' && a.trim() === '倍率') break;
     if (a === null || a === undefined || a === '') { r++; continue; }
     const vals = [];
-    for (let i = 0; i < 21; i++) vals.push(grid[r] ? grid[r][ampCol + 1 + off + i] : null);
+    for (let i = 0; i < nBoom; i++) vals.push(grid[r] ? grid[r][ampCol + 1 + off + i] : null);
     rows.push({ radius: a, vals, sheetRow: r });
     r++;
   }
