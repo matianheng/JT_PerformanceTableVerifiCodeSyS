@@ -94,7 +94,6 @@ function parseBlock(grid, ampCol, headRow, off, extraOverride) {
     if (typeof v !== 'number') break;
     nBoom++;
   }
-  if (!nBoom) nBoom = 21;
   const booms = [];
   for (let i = 0; i < nBoom; i++) booms.push(grid[boomRow] ? grid[boomRow][ampCol + 1 + off + i] : null);
   const rows = []; // {radius, vals[nBoom], sheetRow}
@@ -111,7 +110,7 @@ function parseBlock(grid, ampCol, headRow, off, extraOverride) {
   return { title, titleRow, extra, boomRow, booms, rows };
 }
 /* 臂长按递减处分段：13→50.7、17.7→41.2、22.5→46 是三组（每组内递增，组间回落）。
-   返回每组在 21 列里的列下标；空列（null）跳过。 */
+   返回每组在臂长列里的列下标；空列（null）跳过。列数不固定，Excel 有多少读多少。 */
 function splitGroups(booms) {
   const entries = booms.map((b, i) => ({ b: cleanBoom(b), i })).filter(e => typeof e.b === 'number');
   const groups = [];
